@@ -3,5 +3,5 @@ platformVersion: "3.14"
 run:
   port: 8080
 healthCheck:
-  path: /health
+  path: /api/health
   expectedStatusCode: 418
