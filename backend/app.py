@@ -9,6 +9,7 @@ from pathlib import Path
 from backend.models import NoteCreate, NoteUpdate, NoteOut, AIResult
 from backend.store import note_store
 from backend.ai_service import AIAction, run_ai_action, is_ai_enabled
+from backend.broken_module import something_that_doesnt_exist
 
 app = FastAPI(title="Smart Notes", version="0.1.0")
 

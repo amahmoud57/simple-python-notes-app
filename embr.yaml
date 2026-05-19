@@ -4,4 +4,3 @@ run:
   port: 8080
 healthCheck:
   path: /api/health
-  expectedStatusCode: 418
