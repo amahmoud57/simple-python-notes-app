@@ -4,3 +4,4 @@ backend:
   platformVersion: "3.14"
   run:
     port: 8080
+    start: gunicorn --bind 0.0.0.0:8080 application:app
