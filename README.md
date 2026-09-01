@@ -4,17 +4,22 @@ A template app ready to deploy on [Embr](https://portal.embrdev.io). FastAPI bac
 
 ## Deploy to Embr
 
-This repo includes a [`build.yaml`](build.yaml) that tells Embr how to build and run the app:
+This repo includes a [`builder.yaml`](builder.yaml) component manifest:
 
 ```yaml
-version: 1
-platform: python
-platformVersion: "3.14"
-run:
-  port: 8080
+name: smart-notes
+components:
+  - name: web
+    role: web
+    platform: python
+    platformVersion: "3.14"
+    run:
+      port: 8080
+      healthCheckPath: /api/health
+    path: /
 ```
 
-Connect this repo in the [Embr Portal](https://portal.embrdev.io), and Embr will install dependencies from `requirements.txt`, then start the server automatically.
+Connect this repo to a Builder app, and Embr will install dependencies from `requirements.txt`, start the server, and verify `/api/health` before shifting traffic.
 
 ## Run Locally
 
