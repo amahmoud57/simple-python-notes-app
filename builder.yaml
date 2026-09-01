@@ -1,5 +1,10 @@
-version: 1
-platform: python
-platformVersion: "3.14"
-run:
-  port: 8080
+name: smart-notes
+components:
+  - name: web
+    role: web
+    platform: python
+    platformVersion: "3.14"
+    run:
+      port: 8080
+      healthCheckPath: /api/health
+    path: /
