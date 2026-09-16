@@ -160,6 +160,10 @@
 .step-overline { gap: 8px; margin-bottom: 7px; }
 .step-overline span { color: var(--phase); font: 900 8px/1 var(--mono); text-transform: uppercase; }
 .step-overline span + span { padding-left: 8px; color: #aebbb5; border-left: 1px solid #5e6a65; }
+.step-overline .execution-surface { margin-left: auto; padding: 4px 6px; color: #fff; background: #59655f; border: 1px solid #75817b; border-radius: 2px; letter-spacing: 0; }
+.step-overline .execution-surface.surface-armApi { color: #201805; background: #f1bb2f; border-color: #ffd86d; }
+.step-overline .execution-surface.surface-nonArmApi { color: #071c21; background: #77d9ec; border-color: #a6eaf7; }
+.step-overline .execution-surface.surface-command { color: #fff; background: #6f559b; border-color: #a88ed1; }
 .step-summary h2 { margin: 0; overflow: hidden; color: #fff; text-overflow: ellipsis; white-space: nowrap; font: 700 22px/1 var(--display); }
 .step-progress { grid-column: 1 / -1; height: 4px; overflow: hidden; background: #4c5a54; }
 .step-progress span { display: block; height: 100%; background: var(--phase); transition: width 250ms ease; }
@@ -289,7 +293,7 @@
 .detail-drawer > header span { color: #77d9ec; font: 900 8px/1 var(--mono); text-transform: uppercase; }
 .detail-drawer > header h2 { margin: 6px 0 0; color: #fff; font: 700 25px/1 var(--display); }
 .detail-drawer > header .icon-button { color: #fff; background: transparent; border-color: #5a6862; }
-.detail-facts { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); margin: 0; border-bottom: 1px solid var(--line); }
+.detail-facts { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); margin: 0; border-bottom: 1px solid var(--line); }
 .detail-facts div { padding: 11px 14px; border-right: 1px solid var(--line); }
 .detail-facts div:last-child { border-right: 0; }
 .detail-facts dt { color: var(--muted); font: 900 7px/1 var(--mono); text-transform: uppercase; }

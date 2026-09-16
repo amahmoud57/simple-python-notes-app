@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  executionSurfaceLabels,
   getCutoverState,
   getNodeExample,
   getScenario,
@@ -18,9 +19,26 @@ describe('deployment model', () => {
         expect(step.reason).not.toBe('')
         expect(step.result).not.toBe('')
         expect(step.api).not.toBe('')
+        expect(executionSurfaceLabels[step.executionSurface]).toMatch(/^(ARM|NON-ARM)/)
         expect(`${step.title} ${step.payload} ${step.reason} ${step.result}`).not.toMatch(/\badapter\b/i)
       }
     }
+  })
+
+  it('classifies ARM, non-ARM, internal, and command execution surfaces', () => {
+    const scenario = getScenario('manual')
+    const surface = (id: string) => scenario.steps.find((step) => step.id === id)?.executionSurface
+
+    expect(surface('arm-request')).toBe('armApi')
+    expect(surface('regional-request')).toBe('nonArmApi')
+    expect(surface('create-deployment')).toBe('internal')
+    expect(surface('resolve-revision')).toBe('nonArmApi')
+    expect(surface('checkout-source')).toBe('command')
+    expect(surface('publish-static')).toBe('command')
+    expect(surface('publish-image')).toBe('armApi')
+    expect(surface('import-artifact')).toBe('armApi')
+    expect(surface('direct-health')).toBe('nonArmApi')
+    expect(surface('activate-route')).toBe('nonArmApi')
   })
 
   it('explains the AppVersion ready gate as concrete build and runtime settings', () => {

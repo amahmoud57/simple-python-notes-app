@@ -22,6 +22,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import {
+  executionSurfaceLabels,
   getNodeLabel,
   nodes,
   phaseLabels,
@@ -346,6 +347,15 @@ export function SystemStage({
           <div className="step-overline">
             <span>{isAnimating ? 'In progress' : step ? 'Up next' : 'Complete'}</span>
             <span>{step ? phaseLabels[step.phase] : phaseLabels.succeeded}</span>
+            {step ? (
+              <span
+                className={`execution-surface surface-${step.executionSurface}`}
+                aria-label={`Execution surface: ${executionSurfaceLabels[step.executionSurface]}`}
+                title={step.api}
+              >
+                {executionSurfaceLabels[step.executionSurface]}
+              </span>
+            ) : null}
           </div>
           <h2 id="active-step-title">{step?.title ?? 'Deployment complete'}</h2>
         </div>

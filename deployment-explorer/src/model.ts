@@ -39,6 +39,12 @@ export type PayloadKind =
   | 'timer'
   | 'delete'
 
+export type ExecutionSurface =
+  | 'armApi'
+  | 'nonArmApi'
+  | 'internal'
+  | 'command'
+
 export type CutoverState =
   | 'empty'
   | 'existing'
@@ -71,6 +77,7 @@ export interface FlowStep {
   reason: string
   result: string
   api: string
+  executionSurface: ExecutionSurface
   cutoverDuring?: CutoverState
   cutoverAfter?: CutoverState
 }
@@ -105,6 +112,13 @@ export const phaseLabels: Record<Phase, string> = {
   succeeded: 'Succeeded',
 }
 
+export const executionSurfaceLabels: Record<ExecutionSurface, string> = {
+  armApi: 'ARM API',
+  nonArmApi: 'NON-ARM API',
+  internal: 'NON-ARM · INTERNAL',
+  command: 'NON-ARM · COMMAND',
+}
+
 export const nodes: SystemNode[] = [
   { id: 'client', label: 'Builder CLI', eyebrow: 'Customer client', x: 20, y: 38, group: 'control' },
   { id: 'arm', label: 'ARM API', eyebrow: 'Microsoft.Web', x: 184, y: 38, group: 'control' },
@@ -124,7 +138,14 @@ export const nodes: SystemNode[] = [
   { id: 'customer', label: 'Customer URL', eyebrow: 'Public request', x: 54, y: 530, group: 'traffic' },
 ]
 
-const step = (value: FlowStep): FlowStep => value
+type FlowStepDefinition = Omit<FlowStep, 'executionSurface'> & {
+  executionSurface?: ExecutionSurface
+}
+
+const step = (value: FlowStepDefinition): FlowStep => ({
+  ...value,
+  executionSurface: value.executionSurface ?? 'internal',
+})
 
 const createDeploymentStep = (deploymentId: string, appVersionId: string): FlowStep => step({
   id: 'create-deployment',
@@ -159,6 +180,7 @@ const sourceBuildSteps = (
           reason: 'Regional asks GitHub for the current SHA of branch main. The build must use one immutable commit, not a moving branch name.',
           result: 'Source revision fixed at commit 9f42c1e4a77b...',
           api: 'GetBranchShaAsync(installationId, owner, repository, "main")',
+          executionSurface: 'nonArmApi',
         }),
       ]
     : []),
@@ -173,6 +195,7 @@ const sourceBuildSteps = (
     reason: 'Regional downloads builder.yaml at that exact commit and validates its components, routes, output directories, and health path.',
     result: 'Manifest accepted: web static component + API compute component',
     api: 'GET /repos/contoso/shop/contents/builder.yaml?ref=9f42c1e...',
+    executionSurface: 'nonArmApi',
   }),
   step({
     id: 'create-version',
@@ -209,6 +232,7 @@ const sourceBuildSteps = (
     reason: 'The temporary ADC sandbox checks out the exact commit recorded on the AppVersion, so every component sees the same source tree.',
     result: 'Commit 9f42c1e checked out at /app in the build sandbox',
     api: 'Sandboxes.ExecuteShellCommandAsync: git fetch --depth 1 $EMBR_CLONE_URL $EMBR_REVISION',
+    executionSurface: 'command',
   }),
   step({
     id: 'build-components',
@@ -233,6 +257,7 @@ const sourceBuildSteps = (
     reason: 'The web component files are uploaded under an immutable versioned Blob prefix that YARP can serve directly.',
     result: `Static output recorded at static-assets/app_shop/${appVersionId}/web/site`,
     api: 'azcopy copy /tmp/embr-static/* $EMBR_STATIC_SAS_URL --recursive --put-md5',
+    executionSurface: 'command',
   }),
   step({
     id: 'publish-image',
@@ -245,6 +270,7 @@ const sourceBuildSteps = (
     reason: 'The API component output and entrypoint are packaged as an OCI image and pushed to ACR by digest.',
     result: 'Compute output recorded as api@sha256:71ab42d9c508...',
     api: 'POST {registryResourceId}/scheduleRun?api-version=2019-04-01',
+    executionSurface: 'armApi',
   }),
   step({
     id: 'finish-version-build',
@@ -269,6 +295,7 @@ const sourceBuildSteps = (
     reason: 'The Deployment reads the ready AppVersion compute digest and imports that image into ADC for runtime provisioning.',
     result: 'ADC Artifact Version created from the recorded OCI digest: ready',
     api: 'PUT .../providers/Microsoft.App/artifacts/embr-{deploymentHash}',
+    executionSurface: 'armApi',
   }),
   step({
     id: 'create-candidate',
@@ -283,6 +310,7 @@ const sourceBuildSteps = (
       : 'This is the app first runtime provider. It starts isolated until health checks pass.',
     result: 'candidate provisioned at 0% traffic',
     api: 'PUT .../providers/Microsoft.App/artifactApps/embr-{deploymentHash}',
+    executionSurface: 'armApi',
     cutoverAfter: 'candidate',
   }),
   step({
@@ -300,6 +328,7 @@ const sourceBuildSteps = (
       ? 'HTTP 200 twice; candidate remains at 0%'
       : 'HTTP 200 twice; public route remains unassigned',
     api: 'GET https://{candidateFqdn}/api/health',
+    executionSurface: 'nonArmApi',
     cutoverAfter: 'healthy',
   }),
   step({
@@ -317,6 +346,7 @@ const sourceBuildSteps = (
       ? `YARP targets ${versionLabel}; the previous provider is retained`
       : `YARP now targets ${versionLabel}; the first public route is live`,
     api: 'IYarpClient.ActivateAppRouteAsync(routeMutationFence, staticRouting, vms, backendPrefixes)',
+    executionSurface: 'nonArmApi',
     cutoverAfter: 'switched',
   }),
   step({
@@ -330,6 +360,7 @@ const sourceBuildSteps = (
     reason: 'Direct health is insufficient. Embr must prove that the public route converged.',
     result: `X-Embr-App-Version: ${appVersionId}`,
     api: 'GET https://shop.embr.example/api/health',
+    executionSurface: 'nonArmApi',
     cutoverAfter: 'verified',
   }),
   ...(hasExistingRuntime
@@ -358,6 +389,7 @@ const sourceBuildSteps = (
           reason: 'The old Artifact App is retained until route convergence and connection draining are safe.',
           result: 'old Artifact App and ADC Artifact deleted',
           api: 'DELETE .../artifactApps/{old}; DELETE .../artifacts/{old}',
+          executionSurface: 'armApi',
           cutoverDuring: 'deleting',
           cutoverAfter: 'deleted',
         }),
@@ -391,6 +423,7 @@ const manualSteps: FlowStep[] = [
     reason: 'The customer explicitly asks Builder Apps to deploy its configured source.',
     result: '202 Accepted + Azure-AsyncOperation URL',
     api: 'POST .../Microsoft.Web/builderApps/shop/deploy?api-version=2026-08-01',
+    executionSurface: 'armApi',
   }),
   step({
     id: 'regional-request',
@@ -403,6 +436,7 @@ const manualSteps: FlowStep[] = [
     reason: 'ARM reads the tenant and object IDs from the authenticated Microsoft Entra principal. The customer cannot supply these identity fields in the action body.',
     result: 'Regional receives AppId, trigger metadata, and Entra identity { tenantId, objectId }',
     api: 'StartAppDeploymentRequest { AppId, Trigger, ArmCaller }',
+    executionSurface: 'nonArmApi',
   }),
   step({
     id: 'validate-app',
@@ -444,6 +478,7 @@ const pushSteps: FlowStep[] = [
     reason: 'The webhook provides the exact revision and replaces the manual ARM trigger.',
     result: 'HMAC verified for delivery gh-921',
     api: 'POST /webhooks/github with X-Hub-Signature-256',
+    executionSurface: 'nonArmApi',
   }),
   step({
     id: 'fanout-push',
@@ -499,6 +534,7 @@ const retainedSteps = (action: 'redeploy' | 'rollback'): FlowStep[] => {
       reason: action === 'rollback' ? 'The customer selects a historical immutable version.' : 'The customer asks for fresh runtime resources without rebuilding source.',
       result: '202 Accepted + operation URL',
       api: `POST .../Microsoft.Web/builderApps/shop/${action}`,
+      executionSurface: 'armApi',
     }),
     step({
       id: `${action}-regional`,
@@ -511,6 +547,7 @@ const retainedSteps = (action: 'redeploy' | 'rollback'): FlowStep[] => {
       reason: 'ARM forwards identity from the authenticated Microsoft Entra principal together with the action metadata.',
       result: 'Regional receives AppId, trigger metadata, and Entra identity { tenantId, objectId }',
       api: `AppDeploymentService.Trigger${action === 'rollback' ? 'Rollback' : 'Redeploy'}Async`,
+      executionSurface: 'nonArmApi',
     }),
     step({
       id: `${action}-reserve-app`,
@@ -559,6 +596,7 @@ const retainedSteps = (action: 'redeploy' | 'rollback'): FlowStep[] => {
       reason: 'The new Deployment imports the retained image under its own deterministic resource ID.',
       result: 'new ADC Artifact Version: Ready',
       api: 'PUT .../providers/Microsoft.App/artifacts/embr-{newDeploymentHash}',
+      executionSurface: 'armApi',
     }),
     step({
       id: `${action}-candidate`,
@@ -571,6 +609,7 @@ const retainedSteps = (action: 'redeploy' | 'rollback'): FlowStep[] => {
       reason: 'Redeploy and rollback are still blue-green; an old provider is never revived in place.',
       result: 'new candidate at 0% traffic',
       api: 'PUT .../providers/Microsoft.App/artifactApps/embr-{newDeploymentHash}',
+      executionSurface: 'armApi',
       cutoverAfter: 'candidate',
     }),
     step({
@@ -584,6 +623,7 @@ const retainedSteps = (action: 'redeploy' | 'rollback'): FlowStep[] => {
       reason: 'The current provider keeps serving until the replacement proves healthy.',
       result: 'HTTP 200 twice; candidate remains at 0%',
       api: 'GET https://{candidateFqdn}/api/health',
+      executionSurface: 'nonArmApi',
       cutoverAfter: 'healthy',
     }),
     step({
@@ -597,6 +637,7 @@ const retainedSteps = (action: 'redeploy' | 'rollback'): FlowStep[] => {
       reason: 'Static and compute destinations move to the selected version together.',
       result: `YARP targets ${targetVersion}; old provider retained`,
       api: 'IYarpClient.ActivateAppRouteAsync',
+      executionSurface: 'nonArmApi',
       cutoverAfter: 'switched',
     }),
     step({
@@ -610,6 +651,7 @@ const retainedSteps = (action: 'redeploy' | 'rollback'): FlowStep[] => {
       reason: 'The public response must identify the selected retained AppVersion.',
       result: `X-Embr-App-Version: ${targetVersion}`,
       api: 'GET https://shop.embr.example/api/health',
+      executionSurface: 'nonArmApi',
       cutoverAfter: 'verified',
     }),
     step({
@@ -636,6 +678,7 @@ const retainedSteps = (action: 'redeploy' | 'rollback'): FlowStep[] => {
       reason: 'The previous resources remain available until route convergence and draining are safe.',
       result: 'old Artifact App and ADC Artifact deleted',
       api: 'DELETE .../artifactApps/{old}; DELETE .../artifacts/{old}',
+      executionSurface: 'armApi',
       cutoverDuring: 'deleting',
       cutoverAfter: 'deleted',
     }),

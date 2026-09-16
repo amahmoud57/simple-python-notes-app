@@ -14,6 +14,7 @@ describe('Deployment Explorer', () => {
 
     expect(screen.getByText('What happens now')).toBeInTheDocument()
     expect(screen.getByText('State after this step')).toBeInTheDocument()
+    expect(screen.getByLabelText('Execution surface: ARM API')).toBeInTheDocument()
     expect(screen.getByText(/customer explicitly asks Builder Apps/)).toBeInTheDocument()
     expect(container.querySelector('.transfer-route')).toHaveTextContent('Builder CLI')
     expect(container.querySelector('.transfer-route')).toHaveTextContent('ARM API')
@@ -29,6 +30,7 @@ describe('Deployment Explorer', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Next step' }))
     expect(screen.getByRole('heading', { name: 'Forward the authenticated ARM identity' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Execution surface: NON-ARM API')).toBeInTheDocument()
     expect(screen.getByText('Microsoft Entra tenant ID + object ID + request ID demo-842')).toBeInTheDocument()
     expect(screen.getByText(/Entra identity \{ tenantId, objectId \}/)).toBeInTheDocument()
     expect(container.querySelector('.travel-payload')).not.toBeInTheDocument()
@@ -45,6 +47,7 @@ describe('Deployment Explorer', () => {
     expect(screen.getByRole('heading', { name: 'AppVersion' })).toBeInTheDocument()
     expect(screen.getByText('AppVersion before creation')).toBeInTheDocument()
     expect(screen.getByText(/not created yet/)).toBeInTheDocument()
+    expect(screen.getByText('API boundary').parentElement).toHaveTextContent('ARM API')
 
     fireEvent.click(screen.getByRole('tab', { name: 'API' }))
     expect(screen.getByText(/CreatePendingFromReferenceAsync/)).toBeInTheDocument()
