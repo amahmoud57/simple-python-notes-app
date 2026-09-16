@@ -18,8 +18,17 @@ describe('deployment model', () => {
         expect(step.reason).not.toBe('')
         expect(step.result).not.toBe('')
         expect(step.api).not.toBe('')
+        expect(`${step.title} ${step.payload} ${step.reason} ${step.result}`).not.toMatch(/\badapter\b/i)
       }
     }
+  })
+
+  it('explains the AppVersion ready gate as concrete build and runtime settings', () => {
+    const readyStep = getScenario('manual').steps.find((step) => step.id === 'finish-version-build')
+
+    expect(readyStep?.title).toContain('build recipe and output')
+    expect(readyStep?.reason).toContain('platform, commands, output directory, role, port, and health path')
+    expect(readyStep?.reason).toContain('at least one immutable output')
   })
 
   it('tracks the old provider through candidate, switch, drain, and deletion', () => {
