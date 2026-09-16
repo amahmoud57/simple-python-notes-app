@@ -5,6 +5,7 @@ import {
   Pause,
   Play,
   RotateCcw,
+  StepBack,
   StepForward,
 } from 'lucide-react'
 import './App.css'
@@ -85,6 +86,13 @@ function App() {
     setCompletedCount((current) => Math.min(current + 1, scenario.steps.length))
   }
 
+  const stepBack = () => {
+    if (isAnimating || completedCount === 0) return
+    setIsPlaying(false)
+    setTravelStarted(false)
+    setCompletedCount((current) => Math.max(current - 1, 0))
+  }
+
   const run = () => {
     if (complete) return
     setIsPlaying(true)
@@ -124,6 +132,9 @@ function App() {
         <div className="playback-controls">
           <button type="button" className="icon-button" onClick={reset} aria-label="Reset deployment flow" title="Reset">
             <RotateCcw size={18} />
+          </button>
+          <button type="button" onClick={stepBack} disabled={isAnimating || completedCount === 0}>
+            <StepBack size={17} /> Previous step
           </button>
           <button type="button" onClick={stepOnce} disabled={isAnimating || complete}>
             <StepForward size={17} /> Next step

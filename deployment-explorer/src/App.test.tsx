@@ -50,6 +50,23 @@ describe('Deployment Explorer', () => {
     expect(screen.getByText(/CreatePendingFromReferenceAsync/)).toBeInTheDocument()
   })
 
+  it('steps backward immediately without moving before the first step', () => {
+    render(<App />)
+
+    const previous = screen.getByRole('button', { name: 'Previous step' })
+    const next = screen.getByRole('button', { name: 'Next step' })
+    expect(previous).toBeDisabled()
+
+    fireEvent.click(next)
+    expect(screen.getByRole('heading', { name: 'Forward the authenticated ARM identity' })).toBeInTheDocument()
+    expect(previous).toBeEnabled()
+
+    fireEvent.click(previous)
+    expect(screen.getByRole('heading', { name: 'Request a deployment through ARM' })).toBeInTheDocument()
+    expect(screen.getByLabelText('0 of 20 steps complete')).toBeInTheDocument()
+    expect(previous).toBeDisabled()
+  })
+
   it('switches to a retained-version flow without GitHub build steps', () => {
     render(<App />)
 
