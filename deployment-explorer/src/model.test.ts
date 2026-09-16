@@ -50,7 +50,7 @@ describe('deployment model', () => {
   })
 
   it('tracks the old provider through candidate, switch, drain, and deletion', () => {
-    const scenario = getScenario('push')
+    const scenario = getScenario('update')
     const countAfter = (id: string) => scenario.steps.findIndex((step) => step.id === id) + 1
 
     expect(getCutoverState(scenario, 0)).toBe('existing')
@@ -60,6 +60,17 @@ describe('deployment model', () => {
     expect(getCutoverState(scenario, countAfter('promote-runtime'))).toBe('draining')
     expect(getCutoverState(scenario, scenario.steps.length - 1, scenario.steps.at(-1))).toBe('deleting')
     expect(getCutoverState(scenario, scenario.steps.length)).toBe('deleted')
+  })
+
+  it('shows the active ARM update path instead of gated webhook auto-deploy', () => {
+    expect(scenarios.map((scenario) => scenario.id)).not.toContain('push')
+    expect(scenarios.map((scenario) => scenario.label)).not.toContain('GitHub push')
+
+    const update = getScenario('update')
+    expect(update.label).toBe('Manual update')
+    expect(update.steps[0].id).toBe('arm-request')
+    expect(update.steps[0].executionSurface).toBe('armApi')
+    expect(update.steps.some((step) => step.id === 'resolve-revision')).toBe(true)
   })
 
   it('models health as a gate on the candidate rather than a standalone entity', () => {

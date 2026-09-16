@@ -83,7 +83,7 @@ export interface FlowStep {
 }
 
 export interface Scenario {
-  id: 'manual' | 'push' | 'redeploy' | 'rollback'
+  id: 'manual' | 'update' | 'redeploy' | 'rollback'
   label: string
   title: string
   summary: string
@@ -466,58 +466,59 @@ const manualSteps: FlowStep[] = [
   ...sourceBuildSteps(true, 'adp_demo', 'ver_demo', 'v1', false),
 ]
 
-const pushSteps: FlowStep[] = [
+const updateSteps: FlowStep[] = [
   step({
-    id: 'signed-push',
+    id: 'arm-request',
     phase: 'pending',
-    title: 'Receive a signed GitHub push',
+    title: 'Request an update through ARM',
     source: 'client',
     target: 'arm',
-    payload: 'push event + exact after SHA',
+    payload: 'POST /deploy + request ID',
     payloadKind: 'request',
-    reason: 'The webhook provides the exact revision and replaces the manual ARM trigger.',
-    result: 'HMAC verified for delivery gh-921',
-    api: 'POST /webhooks/github with X-Hub-Signature-256',
+    reason: 'The customer explicitly asks Builder Apps to build the latest revision of its configured branch and replace the active version.',
+    result: '202 Accepted + Azure-AsyncOperation URL',
+    api: 'POST .../Microsoft.Web/builderApps/shop/deploy?api-version=2026-08-01',
+    executionSurface: 'armApi',
+  }),
+  step({
+    id: 'regional-request',
+    phase: 'pending',
+    title: 'Forward the authenticated ARM identity',
+    source: 'arm',
+    target: 'regional',
+    payload: 'Microsoft Entra tenant ID + object ID + request ID update-842',
+    payloadKind: 'request',
+    reason: 'ARM forwards identity from the authenticated Microsoft Entra principal to the Regional API.',
+    result: 'Regional receives AppId, trigger metadata, and Entra identity { tenantId, objectId }',
+    api: 'StartAppDeploymentRequest { AppId, Trigger, ArmCaller }',
     executionSurface: 'nonArmApi',
   }),
   step({
-    id: 'fanout-push',
+    id: 'validate-app',
     phase: 'pending',
-    title: 'Match repository, branch, and auto-deploy',
-    source: 'arm',
-    target: 'regional',
-    payload: 'repository 84721 + main + 9f42c1e',
-    payloadKind: 'revision',
-    reason: 'Only Builder Apps bound to this repository and branch with auto-deploy enabled qualify.',
-    result: 'deployment-explorer-demo matches repository 84721, branch main, and auto-deploy=true',
-    api: 'ListBySourceAsync(github, repositoryId) -> TriggerAsync(sourceRevision)',
-  }),
-  step({
-    id: 'validate-push-app',
-    phase: 'pending',
-    title: 'Load and validate the matched Builder App',
+    title: 'Load and validate the Builder App configuration',
     source: 'regional',
     target: 'app',
     payload: 'Builder App ID: app_shop',
     payloadKind: 'resource',
-    reason: 'Regional loads the matched Builder App and validates its deployment configuration before writing an operation record.',
-    result: 'Builder App configuration valid; IDs derived from github:84721:9f42c1e',
-    api: 'GetByIdAsync -> ValidateAppConfiguration -> AppDeploymentId.ForTrigger',
+    reason: 'Regional validates the existing Builder App, including its source authorization and active v16 runtime.',
+    result: 'Builder App configuration valid; deployment ID adp_update and AppVersion ID ver_update are reserved',
+    api: 'GetByIdAsync -> ValidateAppConfiguration -> runtimeProvider.IsConfigured',
   }),
-  createDeploymentStep('adp_push', 'ver_push_9f42'),
+  createDeploymentStep('adp_update', 'ver_update'),
   step({
-    id: 'reserve-push-app',
+    id: 'reserve-app',
     phase: 'pending',
     title: 'Reserve the Builder App for this Deployment',
     source: 'deployment',
     target: 'app',
-    payload: 'pendingDeploymentId: adp_push',
+    payload: 'pendingDeploymentId: adp_update',
     payloadKind: 'resource',
-    reason: 'The app pendingDeploymentId slot prevents two push or manual Deployments from executing concurrently.',
-    result: 'BuilderApp.pendingDeploymentId = adp_push; this Deployment owns execution',
+    reason: 'The app pendingDeploymentId slot prevents two manual Deployments from executing concurrently.',
+    result: 'BuilderApp.pendingDeploymentId = adp_update; this Deployment owns execution',
     api: 'ResumeAsync -> AdmitAsync -> TryAdmitDeploymentAsync',
   }),
-  ...sourceBuildSteps(false, 'adp_push', 'ver_push_9f42', 'v17', true),
+  ...sourceBuildSteps(true, 'adp_update', 'ver_update', 'v17', true),
 ]
 
 const retainedSteps = (action: 'redeploy' | 'rollback'): FlowStep[] => {
@@ -699,16 +700,15 @@ export const scenarios: Scenario[] = [
     steps: manualSteps,
   },
   {
-    id: 'push',
-    label: 'GitHub push',
-    title: 'Auto-deploy an exact push revision',
-    summary: 'A signed push replaces manual admission and branch resolution; the same AppVersion and activation pipeline follows.',
+    id: 'update',
+    label: 'Manual update',
+    title: 'Build v17 and replace v16',
+    summary: 'The ARM deploy action resolves the configured branch, builds a new AppVersion, and keeps v16 live until v17 passes health and YARP switches.',
     hasExistingRuntime: true,
     oldVersion: 'v16',
     newVersion: 'v17',
-    appVersionId: 'ver_push_9f42',
-    nodeLabels: { client: 'GitHub push', arm: 'Webhook API' },
-    steps: pushSteps,
+    appVersionId: 'ver_update',
+    steps: updateSteps,
   },
   {
     id: 'redeploy',
@@ -791,15 +791,14 @@ export function getNodeExample(
   const completedIds = new Set(scenario.steps.slice(0, completedCount).map((item) => item.id))
   const deploymentId = scenario.id === 'manual'
     ? 'adp_demo'
-    : scenario.id === 'push'
-      ? 'adp_push_9f42'
+    : scenario.id === 'update'
+      ? 'adp_update'
       : `adp_${scenario.id}`
   const versionId = scenario.appVersionId
   const versionCreated = scenario.id === 'redeploy' || scenario.id === 'rollback' || completedIds.has('create-version')
   const deploymentCreated = completedIds.has('create-deployment')
     || [...completedIds].some((item) => item.endsWith('-create-deployment'))
   const appReserved = completedIds.has('reserve-app')
-    || completedIds.has('reserve-push-app')
     || [...completedIds].some((item) => item.endsWith('-reserve-app'))
   const staticPublished = scenario.id === 'redeploy' || scenario.id === 'rollback' || completedIds.has('publish-static')
   const imagePublished = scenario.id === 'redeploy' || scenario.id === 'rollback' || completedIds.has('publish-image')
@@ -830,19 +829,15 @@ export function getNodeExample(
   switch (id) {
     case 'client':
       return {
-        title: scenario.id === 'push' ? 'Signed GitHub push' : 'Builder CLI command',
-        format: scenario.id === 'push' ? 'HTTP' : 'CLI',
-        body: scenario.id === 'push'
-          ? 'POST /webhooks/github\nX-GitHub-Event: push\nX-GitHub-Delivery: gh-921\nX-Hub-Signature-256: sha256=<verified-hmac>\n\n{ "after": "9f42c1e4a77...", "ref": "refs/heads/main" }'
-          : `builder app deploy deployment-explorer-demo\n  --subscription 64fc8655-6859-4b06-96d2-df698d5808cc\n  --resource-group rg-builder-cli-demo-amahmoud11\n  --request-id demo-842`,
+        title: 'Builder CLI command',
+        format: 'CLI',
+        body: `builder app deploy deployment-explorer-demo\n  --subscription 64fc8655-6859-4b06-96d2-df698d5808cc\n  --resource-group rg-builder-cli-demo-amahmoud11\n  --request-id demo-842`,
       }
     case 'arm':
       return {
-        title: scenario.id === 'push' ? 'Webhook request' : 'ARM action response',
+        title: 'ARM action response',
         format: 'HTTP',
-        body: scenario.id === 'push'
-          ? 'POST /webhooks/github\nX-GitHub-Event: push\n\n202 Accepted\n{ "received": true, "deploymentId": "adp_push_9f42" }'
-          : `POST .../Microsoft.Web/builderApps/deployment-explorer-demo/${scenario.id === 'manual' ? 'deploy' : scenario.id}\n\n202 Accepted\nAzure-AsyncOperation: .../operationStatuses/${deploymentId}\nRetry-After: 5`,
+        body: `POST .../Microsoft.Web/builderApps/deployment-explorer-demo/${scenario.id === 'manual' || scenario.id === 'update' ? 'deploy' : scenario.id}\n\n202 Accepted\nAzure-AsyncOperation: .../operationStatuses/${deploymentId}\nRetry-After: 5`,
       }
     case 'regional':
       return {
@@ -851,20 +846,19 @@ export function getNodeExample(
         body: json({
           appId: 'app_shop',
           trigger: {
-            kind: scenario.id === 'push' ? 'githubPush' : 'manual',
-            idempotencyKey: scenario.id === 'push' ? 'github:84721:9f42c1e...' : `${scenario.id}:demo-842`,
-            requestedBy: scenario.id === 'push' ? 'github-installation:1211637325' : '093b6f15-6e26-4906-b372-10c4fe0c3eb0',
+            kind: 'manual',
+            idempotencyKey: `${scenario.id}:demo-842`,
+            requestedBy: '093b6f15-6e26-4906-b372-10c4fe0c3eb0',
           },
-          armCaller: scenario.id === 'push' ? undefined : {
+          armCaller: {
             tenantId: '72f988bf-86f1-41af-91ab-2d7cd011db47',
             objectId: '093b6f15-6e26-4906-b372-10c4fe0c3eb0',
           },
-          sourceRevision: scenario.id === 'push' ? '9f42c1e4a77...' : undefined,
         }),
       }
     case 'deployment':
       if (!deploymentCreated) return { title: 'Deployment before creation', format: 'JSON', body: json({ id: deploymentId, state: 'not created yet', waitingFor: 'validated Builder App configuration and trigger metadata' }) }
-      return { title: 'BuilderAppDeployment document', format: 'JSON', body: json({ id: deploymentId, appId: 'app_shop', appVersionId: versionId, status: deploymentStatus, action: scenario.id === 'manual' || scenario.id === 'push' ? 'deploy' : scenario.id, candidateFqdn: candidateCreated ? candidateFqdn : undefined, publicUrl: switched ? 'https://deployment-explorer-demo.example' : undefined, previousDeploymentId: scenario.hasExistingRuntime ? 'adp_previous' : undefined, completedAt: completedCount === scenario.steps.length ? '2026-09-16T18:42:31Z' : undefined }) }
+      return { title: 'BuilderAppDeployment document', format: 'JSON', body: json({ id: deploymentId, appId: 'app_shop', appVersionId: versionId, status: deploymentStatus, action: scenario.id === 'manual' || scenario.id === 'update' ? 'deploy' : scenario.id, candidateFqdn: candidateCreated ? candidateFqdn : undefined, publicUrl: switched ? 'https://deployment-explorer-demo.example' : undefined, previousDeploymentId: scenario.hasExistingRuntime ? 'adp_previous' : undefined, completedAt: completedCount === scenario.steps.length ? '2026-09-16T18:42:31Z' : undefined }) }
     case 'app':
       return { title: 'Pre-existing Microsoft.Web/builderApps resource', format: 'JSON', body: json({ name: 'deployment-explorer-demo', type: 'Microsoft.Web/builderApps', properties: { lifecycleId: 'alc_31', sourceIntegrationState: 'Configured', pendingDeploymentId: appReserved && !promoted ? deploymentId : null, runtime: { activeDeploymentId: promoted ? deploymentId : scenario.hasExistingRuntime ? 'adp_previous' : null, activeAppVersionId: promoted ? versionId : scenario.oldVersion, url: 'https://deployment-explorer-demo.example' } } }) }
     case 'github':

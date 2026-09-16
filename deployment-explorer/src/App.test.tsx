@@ -97,12 +97,12 @@ describe('Deployment Explorer', () => {
     expect(container.querySelector('.traffic-routing')).toHaveAttribute('data-route-target', 'candidate')
     expect(container.querySelectorAll('.yarp-backend-route')).toHaveLength(1)
 
-    fireEvent.click(screen.getByRole('tab', { name: 'GitHub push' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Manual update' }))
     expect(container.querySelector('.traffic-routing')).toHaveAttribute('data-route-target', 'existing')
     expect(container.querySelectorAll('.yarp-backend-route')).toHaveLength(1)
 
-    const pushScenario = getScenario('push')
-    const activationIndex = pushScenario.steps.findIndex((step) => step.id === 'activate-route')
+    const updateScenario = getScenario('update')
+    const activationIndex = updateScenario.steps.findIndex((step) => step.id === 'activate-route')
     for (let index = 0; index < activationIndex; index += 1) fireEvent.click(next)
     expect(container.querySelector('.candidate-health-gate')).toHaveAttribute('data-health-state', 'passed')
     expect(container.querySelector('.traffic-routing')).toHaveAttribute('data-route-target', 'existing')
