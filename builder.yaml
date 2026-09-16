@@ -1,10 +1,5 @@
-name: smart-notes
+name: deployment-explorer
 components:
   - name: web
-    role: web
-    platform: python
-    platformVersion: "3.14"
-    run:
-      port: 8080
-      healthCheckPath: /api/health
+    rootDirectory: deployment-explorer
     path: /
