@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   executionSurfaceLabels,
   getCutoverState,
+  getNodeApi,
   getNodeExample,
   getScenario,
   nodes,
@@ -39,6 +40,16 @@ describe('deployment model', () => {
     expect(surface('import-artifact')).toBe('armApi')
     expect(surface('direct-health')).toBe('nonArmApi')
     expect(surface('activate-route')).toBe('nonArmApi')
+  })
+
+  it('explains where public ARM ends and the private Regional API begins', () => {
+    expect(getNodeApi('arm')).toContain('PUBLIC ARM API')
+    expect(getNodeApi('arm')).toContain('202 + Azure-AsyncOperation')
+    expect(getNodeApi('regional')).toContain('PRIVATE NON-ARM SERVICE API')
+    expect(getNodeApi('regional')).toContain('ClusterIP only')
+    expect(getNodeApi('regional')).toContain('workload identity token + mTLS')
+    expect(getNodeApi('regional')).toContain('TriggerAsync (persist + signal)')
+    expect(getNodeApi('regional')).toContain('ResumeAsync (claim + execute)')
   })
 
   it('explains the AppVersion ready gate as concrete build and runtime settings', () => {
