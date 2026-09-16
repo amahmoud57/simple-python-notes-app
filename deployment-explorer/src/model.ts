@@ -132,9 +132,9 @@ const createDeploymentStep = (deploymentId: string, appVersionId: string): FlowS
   title: 'Create the Deployment referencing the AppVersion',
   source: 'regional',
   target: 'deployment',
-  payload: 'AppVersion ID + frozen settings',
+  payload: 'AppVersion ID + runtime settings snapshot',
   payloadKind: 'resource',
-  reason: 'The pending AppVersion now exists, so the Deployment can reference it and checkpoint execution.',
+  reason: 'The pending AppVersion now exists. The Deployment references it and copies the app settings used for this attempt.',
   result: `Deployment ${deploymentId}: building, appVersionId: ${appVersionId}`,
   api: 'IBuilderAppDeploymentRepository.CreateAsync(deployment with { AppVersionId = versionId })',
 })
@@ -384,14 +384,14 @@ const manualSteps: FlowStep[] = [
   step({
     id: 'regional-request',
     phase: 'pending',
-    title: 'Forward the trusted ARM caller',
+    title: 'Forward the authenticated ARM identity',
     source: 'arm',
     target: 'regional',
-    payload: 'validated caller + arm:build-842',
+    payload: 'Microsoft Entra tenant ID + object ID + request ID demo-842',
     payloadKind: 'request',
-    reason: 'Regional receives identity from the trusted ARM adapter, not from customer JSON.',
-    result: 'caller accepted for app_shop',
-    api: 'POST /internal/regional/v1/builder-apps/deploy',
+    reason: 'ARM reads the tenant and object IDs from the authenticated Microsoft Entra principal. The customer cannot supply these identity fields in the action body.',
+    result: 'Regional receives AppId, trigger metadata, and Entra identity { tenantId, objectId }',
+    api: 'StartAppDeploymentRequest { AppId, Trigger, ArmCaller }',
   }),
   step({
     id: 'reserve-app',
@@ -430,7 +430,7 @@ const pushSteps: FlowStep[] = [
     payload: 'repository 84721 + main + 9f42c1e',
     payloadKind: 'revision',
     reason: 'Only Builder Apps bound to this repository and branch with auto-deploy enabled qualify.',
-    result: 'one eligible Builder App',
+    result: 'deployment-explorer-demo matches repository 84721, branch main, and auto-deploy=true',
     api: 'ListBySourceAsync(github, repositoryId) -> TriggerAsync(sourceRevision)',
   }),
   step({
@@ -466,13 +466,13 @@ const retainedSteps = (action: 'redeploy' | 'rollback'): FlowStep[] => {
     step({
       id: `${action}-regional`,
       phase: 'pending',
-      title: `Forward the ${action} action to Regional`,
+      title: `Forward the authenticated ${action} request`,
       source: 'arm',
       target: 'regional',
-      payload: `${action} action + idempotency key`,
+      payload: `Microsoft Entra tenant ID + object ID + ${action} request ID`,
       payloadKind: 'request',
-      reason: 'Regional receives the validated ARM caller and resolves the existing Builder App.',
-      result: `${action} action accepted for app_shop`,
+      reason: 'ARM forwards identity from the authenticated Microsoft Entra principal together with the action metadata.',
+      result: 'Regional receives AppId, trigger metadata, and Entra identity { tenantId, objectId }',
       api: `AppDeploymentService.Trigger${action === 'rollback' ? 'Rollback' : 'Redeploy'}Async`,
     }),
     step({
@@ -505,7 +505,7 @@ const retainedSteps = (action: 'redeploy' | 'rollback'): FlowStep[] => {
       title: 'Create the Deployment referencing the retained AppVersion',
       source: 'regional',
       target: 'deployment',
-      payload: `${targetVersion} + frozen settings`,
+      payload: `${targetVersion} + runtime settings snapshot`,
       payloadKind: 'resource',
       reason: 'The retained AppVersion has been validated, so the new Deployment can reference it.',
       result: `Deployment adp_${action}: provisioning, appVersionId: ${targetVersion}`,
@@ -751,7 +751,23 @@ export function getNodeExample(
           : `POST .../Microsoft.Web/builderApps/deployment-explorer-demo/${scenario.id === 'manual' ? 'deploy' : scenario.id}\n\n202 Accepted\nAzure-AsyncOperation: .../operationStatuses/${deploymentId}\nRetry-After: 5`,
       }
     case 'regional':
-      return { title: 'StartAppDeploymentRequest', format: 'JSON', body: json({ appId: 'app_shop', deploymentId, action: scenario.id === 'manual' || scenario.id === 'push' ? 'deploy' : scenario.id, idempotencyKey: scenario.id === 'push' ? 'github:84721:9f42c1e...' : `${scenario.id}:demo-842`, sourceRevision: scenario.id === 'push' ? '9f42c1e4a77...' : undefined }) }
+      return {
+        title: 'Internal StartAppDeploymentRequest',
+        format: 'JSON',
+        body: json({
+          appId: 'app_shop',
+          trigger: {
+            kind: scenario.id === 'push' ? 'githubPush' : 'manual',
+            idempotencyKey: scenario.id === 'push' ? 'github:84721:9f42c1e...' : `${scenario.id}:demo-842`,
+            requestedBy: scenario.id === 'push' ? 'github-installation:1211637325' : '093b6f15-6e26-4906-b372-10c4fe0c3eb0',
+          },
+          armCaller: scenario.id === 'push' ? undefined : {
+            tenantId: '72f988bf-86f1-41af-91ab-2d7cd011db47',
+            objectId: '093b6f15-6e26-4906-b372-10c4fe0c3eb0',
+          },
+          sourceRevision: scenario.id === 'push' ? '9f42c1e4a77...' : undefined,
+        }),
+      }
     case 'deployment':
       if (!deploymentCreated) return { title: 'Deployment before creation', format: 'JSON', body: json({ id: deploymentId, state: 'not created yet', waitingFor: versionCreated ? `AppVersion ${versionId} is ready to reference` : 'pending AppVersion creation' }) }
       return { title: 'BuilderAppDeployment document', format: 'JSON', body: json({ id: deploymentId, appId: 'app_shop', appVersionId: versionId, status: completedCount === scenario.steps.length ? 'succeeded' : scenario.steps[completedCount]?.phase ?? 'pending', action: scenario.id === 'manual' || scenario.id === 'push' ? 'deploy' : scenario.id, candidateFqdn: candidateCreated ? candidateFqdn : undefined, publicUrl: switched ? 'https://deployment-explorer-demo.example' : undefined, previousDeploymentId: 'adp_previous', completedAt: completedCount === scenario.steps.length ? '2026-09-16T18:42:31Z' : undefined }) }

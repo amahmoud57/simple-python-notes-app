@@ -24,7 +24,9 @@ describe('Deployment Explorer', () => {
     expect(container.querySelectorAll('.transfer-brief > div')).toHaveLength(2)
 
     fireEvent.click(screen.getByRole('button', { name: 'Next step' }))
-    expect(screen.getByRole('heading', { name: 'Forward the trusted ARM caller' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Forward the authenticated ARM identity' })).toBeInTheDocument()
+    expect(screen.getByText('Microsoft Entra tenant ID + object ID + request ID demo-842')).toBeInTheDocument()
+    expect(screen.getByText(/Entra identity \{ tenantId, objectId \}/)).toBeInTheDocument()
     expect(container.querySelector('.travel-payload')).not.toBeInTheDocument()
   })
 

@@ -92,6 +92,21 @@ describe('deployment model', () => {
     expect(deployment).toContain('"appVersionId": "avp_1"')
   })
 
+  it('names the authenticated ARM identity fields instead of using an ambiguous caller label', () => {
+    const scenario = getScenario('manual')
+    const identityStep = scenario.steps.find((step) => step.id === 'regional-request')
+
+    expect(identityStep?.title).toBe('Forward the authenticated ARM identity')
+    expect(identityStep?.payload).toContain('Microsoft Entra tenant ID + object ID')
+    expect(identityStep?.result).toContain('Entra identity { tenantId, objectId }')
+    expect(`${identityStep?.title} ${identityStep?.payload}`).not.toMatch(/\bcaller\b/i)
+
+    const request = getNodeExample('regional', scenario, 2, 'empty').body
+    expect(request).toContain('"armCaller"')
+    expect(request).toContain('"tenantId": "72f988bf-86f1-41af-91ab-2d7cd011db47"')
+    expect(request).toContain('"objectId": "093b6f15-6e26-4906-b372-10c4fe0c3eb0"')
+  })
+
   it('keeps retained-version flows free of GitHub and build sandbox steps', () => {
     for (const id of ['redeploy', 'rollback'] as const) {
       const scenario = getScenario(id)
