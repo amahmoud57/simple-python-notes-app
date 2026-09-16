@@ -186,8 +186,6 @@ export function SystemStage({
   const targetPoint = step ? point(step.target) : point('arm')
   const PayloadIcon = step ? payloadIcon[step.payloadKind] : CloudCog
   const provider = providerState(cutover, scenario)
-  const calloutLeft = Math.max(12, Math.min(850, targetPoint.x - 110))
-  const calloutTop = targetPoint.y > 420 ? targetPoint.y - 130 : targetPoint.y + 64
   const travelStyle = {
     '--start-x': `${sourcePoint.x}px`,
     '--start-y': `${sourcePoint.y}px`,
@@ -217,15 +215,11 @@ export function SystemStage({
 
       <div className="transfer-brief" aria-live="polite">
         <div>
-          <span>{isAnimating ? 'Moving now' : 'Object'}</span>
+          <span>{isAnimating ? 'Moving now' : 'Moving'}</span>
           <strong>{step?.payload ?? 'Active Deployment reference'}</strong>
         </div>
         <div>
-          <span>Why</span>
-          <strong>{step?.reason ?? 'The verified AppVersion is active.'}</strong>
-        </div>
-        <div>
-          <span>Result</span>
+          <span>After this step</span>
           <strong>{step?.result ?? 'The previous provider has been removed.'}</strong>
         </div>
       </div>
@@ -271,14 +265,6 @@ export function SystemStage({
               onSelect={onSelectNode}
             />
           ))}
-
-          {step ? (
-            <div className="destination-note" style={{ left: calloutLeft, top: calloutTop }}>
-              <span>{getNodeLabel(nodes.find((node) => node.id === step.target) ?? nodes[0], scenario)}</span>
-              <strong>{step.reason}</strong>
-              <small>Produces: {step.result}</small>
-            </div>
-          ) : null}
 
           {step && isAnimating ? (
             <div

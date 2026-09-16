@@ -8,6 +8,17 @@ import App from './App'
 afterEach(cleanup)
 
 describe('Deployment Explorer', () => {
+  it('explains each transfer without covering the system stage', () => {
+    const { container } = render(<App />)
+
+    expect(screen.getByText('Moving')).toBeInTheDocument()
+    expect(screen.getByText('After this step')).toBeInTheDocument()
+    expect(screen.getByText('POST /deploy + request ID')).toBeInTheDocument()
+    expect(screen.getByText('202 Accepted + Azure-AsyncOperation URL')).toBeInTheDocument()
+    expect(container.querySelector('.destination-note')).not.toBeInTheDocument()
+    expect(container.querySelectorAll('.transfer-brief > div')).toHaveLength(2)
+  })
+
   it('opens an evolving example and API details for AppVersion', () => {
     render(<App />)
 
