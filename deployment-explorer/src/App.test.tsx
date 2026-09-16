@@ -22,6 +22,7 @@ describe('Deployment Explorer', () => {
     expect(screen.getByText('No active AppVersion')).toBeInTheDocument()
     expect(screen.getByText('No YARP backend assigned')).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: 'First deploy' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('button', { name: 'Inspect Deployment operation' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Inspect No active provider' })).toBeInTheDocument()
     expect(screen.getByText('POST /deploy + request ID')).toBeInTheDocument()
     expect(screen.getByText('202 Accepted + Azure-AsyncOperation URL')).toBeInTheDocument()

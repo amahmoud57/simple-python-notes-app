@@ -128,7 +128,7 @@ describe('deployment model', () => {
     expect(ready).toContain('@sha256:71ab42d9c508')
   })
 
-  it('creates the pending Deployment before admitting the app and creating its AppVersion', () => {
+  it('persists the operation before admitting the app and creating its AppVersion', () => {
     const scenario = getScenario('manual')
     const ids = scenario.steps.map((step) => step.id)
     const reserveIndex = ids.indexOf('reserve-app')
@@ -163,7 +163,16 @@ describe('deployment model', () => {
     expect(deployment).toContain('"status": "pending"')
 
     const reservedVersion = getNodeExample('version', scenario, deploymentIndex + 1, 'empty').body
-    expect(reservedVersion).toContain('ID reserved by the pending Deployment')
+    expect(reservedVersion).toContain('ID reserved by the pending operation')
+  })
+
+  it('distinguishes the durable operation from runtime deployment', () => {
+    expect(nodes.find((node) => node.id === 'deployment')?.label).toBe('Deployment operation')
+
+    const operationStep = getScenario('manual').steps.find((step) => step.id === 'create-deployment')
+    expect(operationStep?.title).toBe('Persist the build-and-deploy operation')
+    expect(operationStep?.reason).toContain('not the runtime deployment')
+    expect(operationStep?.result).toContain('no AppVersion document or runtime resources exist yet')
   })
 
   it('names the authenticated ARM identity fields instead of using an ambiguous caller label', () => {

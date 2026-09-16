@@ -124,7 +124,7 @@ export const nodes: SystemNode[] = [
   { id: 'arm', label: 'ARM API', eyebrow: 'Microsoft.Web', x: 184, y: 38, group: 'control' },
   { id: 'regional', label: 'Regional API', eyebrow: 'Orchestrator', x: 348, y: 38, group: 'control' },
   { id: 'app', label: 'Builder App', eyebrow: 'ARM resource', x: 512, y: 38, group: 'control' },
-  { id: 'deployment', label: 'Deployment', eyebrow: 'Durable operation', x: 676, y: 38, group: 'control' },
+  { id: 'deployment', label: 'Deployment operation', eyebrow: 'Build + release workflow', x: 676, y: 38, group: 'control' },
   { id: 'version', label: 'AppVersion', eyebrow: 'Immutable build record', x: 840, y: 38, group: 'control' },
   { id: 'github', label: 'GitHub', eyebrow: 'Source provider', x: 48, y: 226, group: 'source' },
   { id: 'manifest', label: 'builder.yaml', eyebrow: 'Component manifest', x: 230, y: 205, group: 'source' },
@@ -150,13 +150,13 @@ const step = (value: FlowStepDefinition): FlowStep => ({
 const createDeploymentStep = (deploymentId: string, appVersionId: string): FlowStep => step({
   id: 'create-deployment',
   phase: 'pending',
-  title: 'Create the pending Deployment record',
+  title: 'Persist the build-and-deploy operation',
   source: 'regional',
   target: 'deployment',
-  payload: `${deploymentId} + reserved AppVersion ID ${appVersionId}`,
+  payload: `operation ${deploymentId} + reserved AppVersion ID ${appVersionId}`,
   payloadKind: 'resource',
-  reason: 'Regional writes the durable Deployment before the AppVersion exists. It preallocates the AppVersion ID and snapshots settings for this attempt.',
-  result: `Deployment ${deploymentId}: pending; AppVersion ${appVersionId}: not created yet`,
+  reason: 'This is not the runtime deployment. Regional first records a durable build-and-deploy operation so ARM can return an operation ID and a reconciler can resume after a process restart.',
+  result: `Operation ${deploymentId}: pending; no AppVersion document or runtime resources exist yet`,
   api: 'IBuilderAppDeploymentRepository.CreateAsync(deployment with { AppVersionId = versionId })',
 })
 
@@ -217,8 +217,8 @@ const sourceBuildSteps = (
     target: 'version',
     payload: `build operation for ${appVersionId}`,
     payloadKind: 'build',
-    reason: 'The Deployment changes from pending to building, acquires the AppVersion build lease, and changes the first component from pending to building.',
-    result: `Deployment ${deploymentId}: building; AppVersion ${appVersionId}: building`,
+    reason: 'The operation changes from pending to building, acquires the AppVersion build lease, and changes the first component from pending to building.',
+    result: `Operation ${deploymentId}: building; AppVersion ${appVersionId}: building`,
     api: 'Status = AppDeploymentStatus.Building -> EnsureVersionReadyAsync -> TryAcquireAsync',
   }),
   step({
@@ -281,7 +281,7 @@ const sourceBuildSteps = (
     payload: 'recorded build settings + immutable output references',
     payloadKind: 'resource',
     reason: 'For every component, Embr has recorded how to build and run it: platform, commands, output directory, role, port, and health path. Each component must also have at least one immutable output.',
-    result: `AppVersion ${appVersionId}: ready; Deployment may now provision runtime resources`,
+    result: `AppVersion ${appVersionId}: ready; the operation may now provision runtime resources`,
     api: 'AppVersionBuildExecutionService.CompleteReadyAsync -> build.status = ready',
   }),
   step({
@@ -292,7 +292,7 @@ const sourceBuildSteps = (
     target: 'artifact',
     payload: 'digest-pinned image',
     payloadKind: 'image',
-    reason: 'The Deployment reads the ready AppVersion compute digest and imports that image into ADC for runtime provisioning.',
+    reason: 'The operation reads the ready AppVersion compute digest and imports that image into ADC for runtime provisioning.',
     result: 'ADC Artifact Version created from the recorded OCI digest: ready',
     api: 'PUT .../providers/Microsoft.App/artifacts/embr-{deploymentHash}',
     executionSurface: 'armApi',
@@ -454,13 +454,13 @@ const manualSteps: FlowStep[] = [
   step({
     id: 'reserve-app',
     phase: 'pending',
-    title: 'Reserve the Builder App for this Deployment',
+    title: 'Reserve the Builder App for this operation',
     source: 'deployment',
     target: 'app',
     payload: 'pendingDeploymentId: adp_demo',
     payloadKind: 'resource',
     reason: 'ResumeAsync admits one non-terminal Deployment at a time by claiming the Builder App pendingDeploymentId slot.',
-    result: 'BuilderApp.pendingDeploymentId = adp_demo; this Deployment owns execution',
+    result: 'BuilderApp.pendingDeploymentId = adp_demo; this operation owns execution',
     api: 'ResumeAsync -> AdmitAsync -> TryAdmitDeploymentAsync',
   }),
   ...sourceBuildSteps(true, 'adp_demo', 'ver_demo', 'v1', false),
@@ -509,13 +509,13 @@ const updateSteps: FlowStep[] = [
   step({
     id: 'reserve-app',
     phase: 'pending',
-    title: 'Reserve the Builder App for this Deployment',
+    title: 'Reserve the Builder App for this operation',
     source: 'deployment',
     target: 'app',
     payload: 'pendingDeploymentId: adp_update',
     payloadKind: 'resource',
     reason: 'The app pendingDeploymentId slot prevents two manual Deployments from executing concurrently.',
-    result: 'BuilderApp.pendingDeploymentId = adp_update; this Deployment owns execution',
+    result: 'BuilderApp.pendingDeploymentId = adp_update; this operation owns execution',
     api: 'ResumeAsync -> AdmitAsync -> TryAdmitDeploymentAsync',
   }),
   ...sourceBuildSteps(true, 'adp_update', 'ver_update', 'v17', true),
@@ -577,13 +577,13 @@ const retainedSteps = (action: 'redeploy' | 'rollback'): FlowStep[] => {
     step({
       id: `${action}-create-deployment`,
       phase: 'provisioning',
-      title: 'Create the Deployment referencing the retained AppVersion',
+      title: 'Create an operation for the retained AppVersion',
       source: 'regional',
       target: 'deployment',
       payload: `${targetVersion} + runtime settings snapshot`,
       payloadKind: 'resource',
-      reason: 'The retained AppVersion has been validated, so the new Deployment can reference it.',
-      result: `Deployment adp_${action}: provisioning, appVersionId: ${targetVersion}`,
+      reason: 'The retained AppVersion already exists and is ready, so the new operation can apply it without rebuilding source.',
+      result: `Operation adp_${action}: provisioning, appVersionId: ${targetVersion}`,
       api: 'IBuilderAppDeploymentRepository.CreateAsync(deployment with { AppVersionId = retainedVersionId })',
     }),
     step({
@@ -594,7 +594,7 @@ const retainedSteps = (action: 'redeploy' | 'rollback'): FlowStep[] => {
       target: 'artifact',
       payload: 'retained OCI digest',
       payloadKind: 'image',
-      reason: 'The new Deployment imports the retained image under its own deterministic resource ID.',
+      reason: 'The new operation imports the retained image under its own deterministic resource ID.',
       result: 'new ADC Artifact Version: Ready',
       api: 'PUT .../providers/Microsoft.App/artifacts/embr-{newDeploymentHash}',
       executionSurface: 'armApi',
@@ -691,7 +691,7 @@ export const scenarios: Scenario[] = [
     id: 'manual',
     label: 'First deploy',
     title: 'Build and activate version 1',
-    summary: 'A pending Deployment record is created first. It resolves source and builds AppVersion v1; runtime provisioning begins only after that version is ready.',
+    summary: 'A durable build-and-deploy operation is recorded first so work can resume after a restart. It creates and builds AppVersion v1; runtime provisioning begins only after that version is ready.',
     hasExistingRuntime: false,
     oldVersion: null,
     newVersion: 'v1',
@@ -858,7 +858,7 @@ export function getNodeExample(
       }
     case 'deployment':
       if (!deploymentCreated) return { title: 'Deployment before creation', format: 'JSON', body: json({ id: deploymentId, state: 'not created yet', waitingFor: 'validated Builder App configuration and trigger metadata' }) }
-      return { title: 'BuilderAppDeployment document', format: 'JSON', body: json({ id: deploymentId, appId: 'app_shop', appVersionId: versionId, status: deploymentStatus, action: scenario.id === 'manual' || scenario.id === 'update' ? 'deploy' : scenario.id, candidateFqdn: candidateCreated ? candidateFqdn : undefined, publicUrl: switched ? 'https://deployment-explorer-demo.example' : undefined, previousDeploymentId: scenario.hasExistingRuntime ? 'adp_previous' : undefined, completedAt: completedCount === scenario.steps.length ? '2026-09-16T18:42:31Z' : undefined }) }
+      return { title: 'BuilderAppDeployment operation document', format: 'JSON', body: json({ id: deploymentId, appId: 'app_shop', appVersionId: versionId, status: deploymentStatus, action: scenario.id === 'manual' || scenario.id === 'update' ? 'deploy' : scenario.id, candidateFqdn: candidateCreated ? candidateFqdn : undefined, publicUrl: switched ? 'https://deployment-explorer-demo.example' : undefined, previousDeploymentId: scenario.hasExistingRuntime ? 'adp_previous' : undefined, completedAt: completedCount === scenario.steps.length ? '2026-09-16T18:42:31Z' : undefined }) }
     case 'app':
       return { title: 'Pre-existing Microsoft.Web/builderApps resource', format: 'JSON', body: json({ name: 'deployment-explorer-demo', type: 'Microsoft.Web/builderApps', properties: { lifecycleId: 'alc_31', sourceIntegrationState: 'Configured', pendingDeploymentId: appReserved && !promoted ? deploymentId : null, runtime: { activeDeploymentId: promoted ? deploymentId : scenario.hasExistingRuntime ? 'adp_previous' : null, activeAppVersionId: promoted ? versionId : scenario.oldVersion, url: 'https://deployment-explorer-demo.example' } } }) }
     case 'github':
@@ -866,7 +866,7 @@ export function getNodeExample(
     case 'manifest':
       return { title: 'builder.yaml', format: 'YAML', body: 'components:\n  - name: web\n    rootDirectory: frontend\n    path: /\n  - name: api\n    rootDirectory: backend\n    path: /api\n    run:\n      healthCheckPath: /health\n\n# web produces static output\n# api produces compute output' }
     case 'version':
-      if (!versionCreated) return { title: 'AppVersion before creation', format: 'JSON', body: json({ id: versionId, state: deploymentCreated ? 'ID reserved by the pending Deployment; AppVersion document not created yet' : 'not created yet', createdFrom: ['exact GitHub revision', 'validated builder.yaml'] }) }
+      if (!versionCreated) return { title: 'AppVersion before creation', format: 'JSON', body: json({ id: versionId, state: deploymentCreated ? 'ID reserved by the pending operation; AppVersion document not created yet' : 'not created yet', createdFrom: ['exact GitHub revision', 'validated builder.yaml'] }) }
       return {
         title: 'Evolving BuilderAppVersion document',
         format: 'JSON',
