@@ -12,7 +12,6 @@ export type NodeId =
   | 'acr'
   | 'artifact'
   | 'candidate'
-  | 'health'
   | 'existing'
   | 'route'
   | 'customer'
@@ -107,23 +106,22 @@ export const phaseLabels: Record<Phase, string> = {
 }
 
 export const nodes: SystemNode[] = [
-  { id: 'client', label: 'Builder CLI', eyebrow: 'Customer client', x: 34, y: 40, group: 'control' },
-  { id: 'arm', label: 'ARM API', eyebrow: 'Microsoft.Web', x: 202, y: 34, group: 'control' },
-  { id: 'regional', label: 'Regional API', eyebrow: 'Orchestrator', x: 382, y: 46, group: 'control' },
-  { id: 'deployment', label: 'Deployment', eyebrow: 'Durable operation', x: 578, y: 30, group: 'control' },
-  { id: 'app', label: 'Builder App', eyebrow: 'ARM resource', x: 824, y: 42, group: 'control' },
-  { id: 'github', label: 'GitHub', eyebrow: 'Source provider', x: 48, y: 222, group: 'source' },
-  { id: 'manifest', label: 'builder.yaml', eyebrow: 'Component manifest', x: 220, y: 196, group: 'source' },
-  { id: 'version', label: 'AppVersion', eyebrow: 'Immutable record', x: 458, y: 184, group: 'build' },
-  { id: 'build', label: 'ADC build sandbox', eyebrow: 'Ephemeral build', x: 350, y: 360, group: 'build' },
-  { id: 'blob', label: 'Blob Storage', eyebrow: 'Static output', x: 602, y: 338, group: 'build' },
-  { id: 'acr', label: 'Azure Container Registry', eyebrow: 'Compute output', x: 786, y: 220, group: 'build' },
-  { id: 'artifact', label: 'ADC Artifact', eyebrow: 'Image import', x: 920, y: 358, group: 'runtime' },
-  { id: 'candidate', label: 'Artifact App candidate', eyebrow: 'New provider', x: 844, y: 516, group: 'runtime' },
-  { id: 'health', label: 'Direct health check', eyebrow: 'Readiness gate', x: 670, y: 520, group: 'runtime' },
-  { id: 'existing', label: 'Existing Artifact App', eyebrow: 'Current provider', x: 492, y: 516, group: 'traffic' },
-  { id: 'route', label: 'YARP route', eyebrow: 'Atomic route', x: 286, y: 538, group: 'traffic' },
-  { id: 'customer', label: 'Customer URL', eyebrow: 'Public route', x: 50, y: 532, group: 'traffic' },
+  { id: 'client', label: 'Builder CLI', eyebrow: 'Customer client', x: 20, y: 38, group: 'control' },
+  { id: 'arm', label: 'ARM API', eyebrow: 'Microsoft.Web', x: 184, y: 38, group: 'control' },
+  { id: 'regional', label: 'Regional API', eyebrow: 'Orchestrator', x: 348, y: 38, group: 'control' },
+  { id: 'app', label: 'Builder App', eyebrow: 'ARM resource', x: 512, y: 38, group: 'control' },
+  { id: 'deployment', label: 'Deployment', eyebrow: 'Durable operation', x: 676, y: 38, group: 'control' },
+  { id: 'version', label: 'AppVersion', eyebrow: 'Immutable build record', x: 840, y: 38, group: 'control' },
+  { id: 'github', label: 'GitHub', eyebrow: 'Source provider', x: 48, y: 226, group: 'source' },
+  { id: 'manifest', label: 'builder.yaml', eyebrow: 'Component manifest', x: 230, y: 205, group: 'source' },
+  { id: 'build', label: 'ADC build sandbox', eyebrow: 'Ephemeral build', x: 382, y: 248, group: 'build' },
+  { id: 'blob', label: 'Blob Storage', eyebrow: 'Static output', x: 390, y: 390, group: 'build' },
+  { id: 'acr', label: 'Azure Container Registry', eyebrow: 'Compute output', x: 555, y: 260, group: 'build' },
+  { id: 'artifact', label: 'ADC Artifact', eyebrow: 'Runtime image import', x: 810, y: 238, group: 'runtime' },
+  { id: 'candidate', label: 'Artifact App candidate', eyebrow: 'New provider', x: 880, y: 380, group: 'runtime' },
+  { id: 'existing', label: 'Existing Artifact App', eyebrow: 'Current provider', x: 690, y: 510, group: 'runtime' },
+  { id: 'route', label: 'YARP route', eyebrow: 'Active backend pointer', x: 320, y: 530, group: 'traffic' },
+  { id: 'customer', label: 'Customer URL', eyebrow: 'Public request', x: 54, y: 530, group: 'traffic' },
 ]
 
 const step = (value: FlowStep): FlowStep => value
@@ -292,7 +290,7 @@ const sourceBuildSteps = (
     phase: 'healthChecking',
     title: 'Prove the candidate healthy in isolation',
     source: 'regional',
-    target: 'health',
+    target: 'candidate',
     payload: 'GET /api/health',
     payloadKind: 'health',
     reason: hasExistingRuntime
@@ -325,8 +323,8 @@ const sourceBuildSteps = (
     id: 'verify-customer-route',
     phase: 'activating',
     title: 'Verify the new version through the customer URL',
-    source: 'route',
-    target: 'customer',
+    source: 'customer',
+    target: 'route',
     payload: 'GET /api/health',
     payloadKind: 'health',
     reason: 'Direct health is insufficient. Embr must prove that the public route converged.',
@@ -580,7 +578,7 @@ const retainedSteps = (action: 'redeploy' | 'rollback'): FlowStep[] => {
       phase: 'healthChecking',
       title: 'Health-check the isolated candidate',
       source: 'regional',
-      target: 'health',
+      target: 'candidate',
       payload: 'GET /api/health',
       payloadKind: 'health',
       reason: 'The current provider keeps serving until the replacement proves healthy.',
@@ -605,8 +603,8 @@ const retainedSteps = (action: 'redeploy' | 'rollback'): FlowStep[] => {
       id: `${action}-verify`,
       phase: 'activating',
       title: 'Verify the selected version through the customer URL',
-      source: 'route',
-      target: 'customer',
+      source: 'customer',
+      target: 'route',
       payload: 'GET /api/health',
       payloadKind: 'health',
       reason: 'The public response must identify the selected retained AppVersion.',
@@ -727,8 +725,7 @@ const apiByNode: Record<NodeId, string> = {
   blob: 'GetStaticAssetsContainerSasUrlAsync\nazcopy copy --recursive --put-md5\nMarkStaticAssetsCompleteAsync',
   acr: 'POST {registry}/scheduleRun?api-version=2019-04-01\nGET {registry}/runs/{runId}',
   artifact: 'PUT | GET | DELETE .../providers/Microsoft.App/artifacts/{name}',
-  candidate: 'PUT | GET | DELETE .../providers/Microsoft.App/artifactApps/{name}',
-  health: 'GET https://{candidateFqdn}/{run.healthCheckPath}\nAppEndpointProbe.WaitForHealthyAsync',
+  candidate: 'PUT | GET | DELETE .../providers/Microsoft.App/artifactApps/{name}\nGET https://{candidateFqdn}/{run.healthCheckPath}\nAppEndpointProbe.WaitForHealthyAsync',
   existing: 'IAppRouteActivator.ActivateAsync(previousVersion)\nDELETE old artifactApps + artifacts after grace',
   route: 'IYarpClient.ActivateAppRouteAsync\nIYarpClient.GetAppAsync\nCosmos ReplaceItemAsync(IfMatchEtag)',
   customer: 'GET https://{app-subdomain}/{run.healthCheckPath}\nExpect X-Embr-App-Version',
@@ -766,6 +763,7 @@ export function getNodeExample(
   const versionBuilding = scenario.id === 'redeploy' || scenario.id === 'rollback' || completedIds.has('start-version-build')
   const versionReady = scenario.id === 'redeploy' || scenario.id === 'rollback' || completedIds.has('finish-version-build')
   const candidateCreated = ['candidate', 'healthy', 'switched', 'verified', 'active', 'draining', 'deleting', 'deleted'].includes(cutover)
+  const candidateHealthy = ['healthy', 'switched', 'verified', 'active', 'draining', 'deleting', 'deleted'].includes(cutover)
   const switched = ['switched', 'verified', 'active', 'draining', 'deleting', 'deleted'].includes(cutover)
   const promoted = ['active', 'draining', 'deleting', 'deleted'].includes(cutover)
   const deploymentStatus = completedCount === scenario.steps.length
@@ -869,9 +867,7 @@ export function getNodeExample(
     case 'artifact':
       return { title: 'Microsoft.App/artifacts resource', format: 'JSON', body: json({ id: `/subscriptions/runtime-sub/resourceGroups/runtime-rg/providers/Microsoft.App/artifacts/${candidateName}`, type: 'Microsoft.App/artifacts', properties: { provisioningState: candidateCreated ? 'Succeeded' : 'NotCreated', source: { kind: 'registry', imageUrl: image }, latestVersionState: candidateCreated ? 'Ready' : null } }) }
     case 'candidate':
-      return { title: 'Microsoft.App/artifactApps candidate', format: 'JSON', body: json({ id: `/subscriptions/runtime-sub/resourceGroups/runtime-rg/providers/Microsoft.App/artifactApps/${candidateName}`, type: 'Microsoft.App/artifactApps', properties: { provisioningState: candidateCreated ? 'Succeeded' : 'NotCreated', ingress: { external: true, targetPort: 8000, fqdn: candidateCreated ? candidateFqdn : null }, scale: { minReplicas: 1, maxReplicas: 1 } } }) }
-    case 'health':
-      return { title: 'Direct health response', format: 'HTTP', body: `GET https://${candidateFqdn}/api/health\n\nHTTP/1.1 ${cutover === 'healthy' || switched ? '200 OK' : '503 Starting'}\nContent-Type: application/json\n\n{ "status": "${cutover === 'healthy' || switched ? 'healthy' : 'starting'}" }` }
+      return { title: 'Microsoft.App/artifactApps candidate', format: 'JSON', body: json({ id: `/subscriptions/runtime-sub/resourceGroups/runtime-rg/providers/Microsoft.App/artifactApps/${candidateName}`, type: 'Microsoft.App/artifactApps', properties: { provisioningState: candidateCreated ? 'Succeeded' : 'NotCreated', ingress: { external: true, targetPort: 8000, fqdn: candidateCreated ? candidateFqdn : null }, scale: { minReplicas: 1, maxReplicas: 1 }, directHealthGate: candidateCreated ? { endpoint: `https://${candidateFqdn}/api/health`, state: candidateHealthy ? 'passed' : 'waiting', successfulResponses: candidateHealthy ? 2 : 0 } : null } }) }
     case 'existing':
       if (!scenario.hasExistingRuntime) return { title: 'Runtime before first deployment', format: 'JSON', body: json({ resourceId: null, appVersionId: null, state: 'no Artifact App exists yet', servingCustomerTraffic: false }) }
       return { title: 'Existing Artifact App', format: 'JSON', body: json({ appVersionId: scenario.oldVersion, resourceId: '/subscriptions/runtime-sub/resourceGroups/runtime-rg/providers/Microsoft.App/artifactApps/embr-existing', servingCustomerTraffic: !switched, state: cutover === 'deleted' ? 'deleted' : cutover === 'deleting' ? 'deleting' : promoted ? 'draining' : 'serving' }) }

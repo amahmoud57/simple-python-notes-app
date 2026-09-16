@@ -4,6 +4,7 @@ import '@testing-library/jest-dom/vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 import App from './App'
+import { getScenario } from './model'
 
 afterEach(cleanup)
 
@@ -57,5 +58,37 @@ describe('Deployment Explorer', () => {
     expect(screen.getByRole('heading', { name: 'Request a retained-version redeploy' })).toBeInTheDocument()
     expect(screen.queryByText('Resolve main to an exact commit')).not.toBeInTheDocument()
     expect(screen.getByText('Validate retained AppVersion ver_17')).toBeInTheDocument()
+  })
+
+  it('creates or switches one YARP backend route after the candidate passes health', () => {
+    const { container } = render(<App />)
+
+    expect(container.querySelector('.traffic-routing')).toHaveAttribute('data-route-target', 'none')
+    expect(container.querySelector('.yarp-backend-route')).not.toBeInTheDocument()
+    expect(container.querySelector('.candidate-health-gate')).toHaveAttribute('data-health-state', 'absent')
+    expect(screen.queryByRole('button', { name: 'Inspect Direct health check' })).not.toBeInTheDocument()
+
+    const next = screen.getByRole('button', { name: 'Next step' })
+    for (let index = 0; index < 17; index += 1) fireEvent.click(next)
+    expect(container.querySelector('.traffic-routing')).toHaveAttribute('data-route-target', 'none')
+    expect(container.querySelector('.candidate-health-gate')).toHaveAttribute('data-health-state', 'passed')
+
+    fireEvent.click(next)
+    expect(container.querySelector('.traffic-routing')).toHaveAttribute('data-route-target', 'candidate')
+    expect(container.querySelectorAll('.yarp-backend-route')).toHaveLength(1)
+
+    fireEvent.click(screen.getByRole('tab', { name: 'GitHub push' }))
+    expect(container.querySelector('.traffic-routing')).toHaveAttribute('data-route-target', 'existing')
+    expect(container.querySelectorAll('.yarp-backend-route')).toHaveLength(1)
+
+    const pushScenario = getScenario('push')
+    const activationIndex = pushScenario.steps.findIndex((step) => step.id === 'activate-route')
+    for (let index = 0; index < activationIndex; index += 1) fireEvent.click(next)
+    expect(container.querySelector('.candidate-health-gate')).toHaveAttribute('data-health-state', 'passed')
+    expect(container.querySelector('.traffic-routing')).toHaveAttribute('data-route-target', 'existing')
+
+    fireEvent.click(next)
+    expect(container.querySelector('.traffic-routing')).toHaveAttribute('data-route-target', 'candidate')
+    expect(container.querySelectorAll('.yarp-backend-route')).toHaveLength(1)
   })
 })

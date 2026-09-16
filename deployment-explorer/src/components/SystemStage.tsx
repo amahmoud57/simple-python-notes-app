@@ -58,7 +58,6 @@ const iconByNode: Record<NodeId, LucideIcon> = {
   acr: Container,
   artifact: Boxes,
   candidate: Server,
-  health: HeartPulse,
   existing: Server,
   route: RouteIcon,
   customer: Globe2,
@@ -87,7 +86,16 @@ const machineSize: Partial<Record<NodeId, { width: number; height: number }>> = 
   manifest: { width: 88, height: 82 },
   version: { width: 136, height: 68 },
   blob: { width: 136, height: 66 },
-  health: { width: 72, height: 72 },
+}
+
+type RouteTarget = 'none' | 'existing' | 'candidate'
+
+function getRouteTarget(cutover: CutoverState, scenario: Scenario): RouteTarget {
+  if (['switched', 'verified', 'active', 'draining', 'deleting', 'deleted'].includes(cutover)) {
+    return 'candidate'
+  }
+
+  return scenario.hasExistingRuntime ? 'existing' : 'none'
 }
 
 function edgePoint(id: NodeId, toward: { x: number; y: number }) {
@@ -287,7 +295,32 @@ export function SystemStage({
     : transferGeometry('client', 'arm')
   const PayloadIcon = step ? payloadIcon[step.payloadKind] : CloudCog
   const provider = providerState(cutover, scenario)
-  const routeLive = scenario.hasExistingRuntime || ['switched', 'verified', 'active'].includes(cutover)
+  const routeTarget = getRouteTarget(cutover, scenario)
+  const routeLive = routeTarget !== 'none'
+  const customerRoute = transferGeometry('customer', 'route')
+  const backendRoute = routeTarget === 'none' ? null : transferGeometry('route', routeTarget)
+  const routePoint = point('route')
+  const candidateExists = ['candidate', 'healthy', 'switched', 'verified', 'active', 'draining', 'deleting', 'deleted'].includes(cutover)
+  const candidateHealthy = ['healthy', 'switched', 'verified', 'active', 'draining', 'deleting', 'deleted'].includes(cutover)
+  const healthStepActive = step?.id === 'direct-health' || step?.id.endsWith('-health')
+  const healthState = candidateHealthy
+    ? 'passed'
+    : healthStepActive && isAnimating
+      ? 'probing'
+      : candidateExists
+        ? healthStepActive
+          ? 'next'
+          : 'waiting'
+        : 'absent'
+  const healthResult = healthState === 'passed'
+    ? 'Passed · 2 × HTTP 200'
+    : healthState === 'probing'
+      ? 'Probing candidate FQDN'
+      : healthState === 'next'
+        ? 'Next · direct candidate probe'
+        : healthState === 'waiting'
+          ? 'Waiting for direct probe'
+          : 'Waiting for candidate'
   const sourceLabel = step
     ? getNodeLabel(nodes.find((node) => node.id === step.source) ?? nodes[0], scenario)
     : null
@@ -368,10 +401,36 @@ export function SystemStage({
                 <path d="M0 0 L8 4 L0 8 Z" />
               </marker>
             </defs>
-            <circle className={`route-halo ${routeLive ? 'is-live' : ''}`} cx="354" cy="572" r="48" />
-            <path className={`customer-line tone-${routeLive ? 'serving' : 'empty'}`} d="M 185 566 C 220 566, 250 572, 286 572" markerEnd={routeLive ? 'url(#green-arrow)' : 'url(#idle-arrow)'} />
-            <path className={`provider-line old tone-${provider.oldTone}`} d="M 422 572 C 448 572, 466 552, 492 552" markerEnd={scenario.hasExistingRuntime ? 'url(#green-arrow)' : undefined} />
-            <path className={`provider-line next tone-${provider.nextTone}`} d="M 422 572 C 550 450, 720 450, 844 552" markerEnd="url(#green-arrow)" />
+            <g className={`traffic-routing target-${routeTarget}`} data-route-target={routeTarget}>
+              <circle className={`route-halo ${routeLive ? 'is-live' : ''}`} cx={routePoint.x} cy={routePoint.y} r="48" />
+              <path className={`customer-line tone-${routeLive ? 'serving' : 'empty'}`} d={customerRoute.path} markerEnd={routeLive ? 'url(#green-arrow)' : 'url(#idle-arrow)'} />
+              {backendRoute ? (
+                <g key={`${scenario.id}-${routeTarget}`}>
+                  <path
+                    className={`yarp-backend-route target-${routeTarget}`}
+                    d={backendRoute.path}
+                    pathLength="1"
+                    markerEnd="url(#green-arrow)"
+                  />
+                  <circle className="traffic-packet" r="5">
+                    <animateMotion dur="1.45s" repeatCount="indefinite" path={backendRoute.path} />
+                  </circle>
+                  <text
+                    className="route-target-label"
+                    x={(backendRoute.start.x + backendRoute.end.x) / 2}
+                    y={(backendRoute.start.y + backendRoute.end.y) / 2 - 13}
+                    textAnchor="middle"
+                  >
+                    ACTIVE → {routeTarget === 'existing' ? scenario.oldVersion : scenario.newVersion}
+                  </text>
+                </g>
+              ) : (
+                <g className="unassigned-backend">
+                  <path d={`M ${routePoint.x + 70} ${routePoint.y} h 72`} />
+                  <text x={routePoint.x + 106} y={routePoint.y - 10} textAnchor="middle">NO BACKEND</text>
+                </g>
+              )}
+            </g>
             {step ? (
               <path
                 key={`${scenario.id}-${step.id}`}
@@ -394,6 +453,14 @@ export function SystemStage({
               onSelect={onSelectNode}
             />
           ))}
+
+          <div className={`candidate-health-gate state-${healthState}`} data-health-state={healthState} aria-live="polite">
+            <span className="health-gate-icon" aria-hidden="true"><HeartPulse size={17} /></span>
+            <div>
+              <span>Direct health gate</span>
+              <strong>{healthResult}</strong>
+            </div>
+          </div>
 
           {step && isAnimating ? (
             <div

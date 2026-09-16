@@ -3,6 +3,7 @@ import {
   getCutoverState,
   getNodeExample,
   getScenario,
+  nodes,
   scenarios,
 } from './model'
 
@@ -32,6 +33,25 @@ describe('deployment model', () => {
     expect(getCutoverState(scenario, countAfter('promote-runtime'))).toBe('draining')
     expect(getCutoverState(scenario, scenario.steps.length - 1, scenario.steps.at(-1))).toBe('deleting')
     expect(getCutoverState(scenario, scenario.steps.length)).toBe('deleted')
+  })
+
+  it('models health as a gate on the candidate rather than a standalone entity', () => {
+    expect(nodes.map((node) => String(node.id))).not.toContain('health')
+    expect(nodes.find((node) => node.id === 'version')?.group).toBe('control')
+    expect(nodes.find((node) => node.id === 'existing')?.group).toBe('runtime')
+
+    for (const scenario of scenarios) {
+      const healthStep = scenario.steps.find((step) => step.id === 'direct-health' || step.id.endsWith('-health'))
+      expect(healthStep?.target).toBe('candidate')
+
+      const verificationStep = scenario.steps.find((step) => step.id === 'verify-customer-route' || step.id.endsWith('-verify'))
+      expect(verificationStep?.source).toBe('customer')
+      expect(verificationStep?.target).toBe('route')
+    }
+
+    const scenario = getScenario('manual')
+    expect(getNodeExample('candidate', scenario, 0, 'candidate').body).toContain('"directHealthGate"')
+    expect(getNodeExample('candidate', scenario, 0, 'healthy').body).toContain('"successfulResponses": 2')
   })
 
   it('models first deploy from an empty runtime without predecessor cleanup', () => {
