@@ -81,7 +81,8 @@ function App() {
   const stepOnce = () => {
     if (isAnimating || complete) return
     setIsPlaying(false)
-    setIsAnimating(true)
+    setTravelStarted(false)
+    setCompletedCount((current) => Math.min(current + 1, scenario.steps.length))
   }
 
   const run = () => {
@@ -125,7 +126,7 @@ function App() {
             <RotateCcw size={18} />
           </button>
           <button type="button" onClick={stepOnce} disabled={isAnimating || complete}>
-            <StepForward size={17} /> Step
+            <StepForward size={17} /> Next step
           </button>
           {isPlaying ? (
             <button type="button" className="primary" onClick={() => setIsPlaying(false)}>

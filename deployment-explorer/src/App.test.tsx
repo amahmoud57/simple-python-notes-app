@@ -13,14 +13,19 @@ describe('Deployment Explorer', () => {
 
     expect(screen.getByText('Moving')).toBeInTheDocument()
     expect(screen.getByText('After this step')).toBeInTheDocument()
+    expect(screen.getByText('Builder App already exists')).toBeInTheDocument()
+    expect(screen.getByText('No active AppVersion')).toBeInTheDocument()
+    expect(screen.getByText('No YARP backend assigned')).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'First deploy' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('button', { name: 'Inspect No active provider' })).toBeInTheDocument()
     expect(screen.getByText('POST /deploy + request ID')).toBeInTheDocument()
     expect(screen.getByText('202 Accepted + Azure-AsyncOperation URL')).toBeInTheDocument()
     expect(container.querySelector('.destination-note')).not.toBeInTheDocument()
     expect(container.querySelectorAll('.transfer-brief > div')).toHaveLength(2)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Step' }))
-    expect(container.querySelector('.travel-payload')).toBeInTheDocument()
-    expect(container.querySelector('.travel-payload span')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Next step' }))
+    expect(screen.getByRole('heading', { name: 'Forward the trusted ARM caller' })).toBeInTheDocument()
+    expect(container.querySelector('.travel-payload')).not.toBeInTheDocument()
   })
 
   it('opens an evolving example and API details for AppVersion', () => {

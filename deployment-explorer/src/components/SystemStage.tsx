@@ -15,6 +15,7 @@ import {
   PackageCheck,
   Route as RouteIcon,
   Server,
+  ServerOff,
   TerminalSquare,
   Workflow,
   type LucideIcon,
@@ -124,8 +125,25 @@ function transferGeometry(source: NodeId, target: NodeId) {
 }
 
 function providerState(cutover: CutoverState, scenario: Scenario) {
-  const old = scenario.oldVersion
+  const old = scenario.oldVersion ?? 'previous version'
   const next = scenario.newVersion
+  if (!scenario.hasExistingRuntime) {
+    switch (cutover) {
+      case 'candidate':
+        return { old: 'No provider', next: `Isolated - ${next}`, oldTone: 'empty', nextTone: 'idle', target: 'No backend assigned', note: `${next} exists in isolation; the customer route is still unassigned.` }
+      case 'healthy':
+        return { old: 'No provider', next: `Healthy - ${next}`, oldTone: 'empty', nextTone: 'ready', target: 'No backend assigned', note: `${next} passed direct health and can now become the first YARP backend.` }
+      case 'switched':
+        return { old: 'No predecessor', next: `Serving - ${next}`, oldTone: 'empty', nextTone: 'serving', target: `YARP targets ${next}`, note: 'The first route is assigned. Customer traffic now reaches the new provider.' }
+      case 'verified':
+        return { old: 'No predecessor', next: `Verified - ${next}`, oldTone: 'empty', nextTone: 'serving', target: `${next} verified`, note: `The customer URL returned ${next}; there is no predecessor to retain.` }
+      case 'active':
+        return { old: 'No predecessor', next: `Active - ${next}`, oldTone: 'empty', nextTone: 'serving', target: `${next} is active`, note: 'The first Deployment is active. No drain or deletion phase is required.' }
+      default:
+        return { old: 'No provider', next: `Not created - ${next}`, oldTone: 'empty', nextTone: 'idle', target: 'No backend assigned', note: 'The Builder App exists, but no Artifact App or YARP backend exists yet.' }
+    }
+  }
+
   switch (cutover) {
     case 'candidate':
       return { old: `Serving 100% - ${old}`, next: `Isolated - ${next}`, oldTone: 'serving', nextTone: 'idle', target: `${old} stays live`, note: `${next} exists but receives no customer traffic.` }
@@ -150,6 +168,7 @@ function NodeButton({
   id,
   scenario,
   step,
+  completedCount,
   selected,
   cutover,
   onSelect,
@@ -157,18 +176,47 @@ function NodeButton({
   id: NodeId
   scenario: Scenario
   step: FlowStep | undefined
+  completedCount: number
   selected: boolean
   cutover: CutoverState
   onSelect: (id: NodeId) => void
 }) {
   const node = nodes.find((item) => item.id === id) ?? nodes[0]
-  const Icon = iconByNode[id]
+  const Icon = id === 'existing' && !scenario.hasExistingRuntime ? ServerOff : iconByNode[id]
+  const eyebrow = id === 'existing' && !scenario.hasExistingRuntime ? 'Runtime starts empty' : node.eyebrow
   const active = step?.source === id || step?.target === id
-  const context = id === 'existing' || id === 'candidate' || id === 'route' || id === 'customer'
+  const context = id === 'app' || id === 'existing' || id === 'candidate' || id === 'route' || id === 'customer'
   const dimmed = Boolean(step && !active && !context && !selected)
   const provider = providerState(cutover, scenario)
-  const status = id === 'existing' ? provider.old : id === 'candidate' ? provider.next : undefined
-  const statusTone = id === 'existing' ? provider.oldTone : id === 'candidate' ? provider.nextTone : undefined
+  const completedIds = new Set(scenario.steps.slice(0, completedCount).map((item) => item.id))
+  const retainedVersion = scenario.id === 'redeploy' || scenario.id === 'rollback'
+  const versionCreated = retainedVersion || completedIds.has('create-version')
+  const versionReady = retainedVersion || completedIds.has('seal-version')
+  const deploymentCreated = completedIds.has('create-deployment')
+    || [...completedIds].some((item) => item.endsWith('-create-deployment'))
+  const lifecycleStatus = id === 'app'
+    ? { text: 'Exists before deploy', tone: 'existing' }
+    : id === 'version'
+      ? versionReady
+        ? { text: 'Ready', tone: 'serving' }
+        : versionCreated
+          ? { text: 'Pending', tone: 'ready' }
+          : { text: 'Not created', tone: 'idle' }
+      : id === 'deployment'
+        ? deploymentCreated
+          ? { text: 'Created', tone: 'existing' }
+          : { text: 'Not created', tone: 'idle' }
+        : undefined
+  const status = id === 'existing'
+    ? provider.old
+    : id === 'candidate'
+      ? provider.next
+      : lifecycleStatus?.text
+  const statusTone = id === 'existing'
+    ? provider.oldTone
+    : id === 'candidate'
+      ? provider.nextTone
+      : lifecycleStatus?.tone
   const classes = [
     'system-node',
     `node-${node.group}`,
@@ -180,6 +228,7 @@ function NodeButton({
     dimmed ? 'is-dimmed' : '',
     id === 'existing' && cutover === 'deleting' ? 'is-deleting' : '',
     id === 'existing' && cutover === 'deleted' ? 'is-deleted' : '',
+    id === 'existing' && !scenario.hasExistingRuntime ? 'is-empty-runtime' : '',
   ].filter(Boolean).join(' ')
 
   return (
@@ -196,7 +245,7 @@ function NodeButton({
         <span>{getNodeLabel(node, scenario)}</span>
       </span>
       <span className="node-copy">
-        <span className="node-eyebrow">{node.eyebrow}</span>
+        <span className="node-eyebrow">{eyebrow}</span>
         <strong>{getNodeLabel(node, scenario)}</strong>
         {status ? <span className={`provider-status tone-${statusTone}`}>{status}</span> : null}
       </span>
@@ -220,6 +269,7 @@ export function SystemStage({
     : transferGeometry('client', 'arm')
   const PayloadIcon = step ? payloadIcon[step.payloadKind] : CloudCog
   const provider = providerState(cutover, scenario)
+  const routeLive = scenario.hasExistingRuntime || ['switched', 'verified', 'active'].includes(cutover)
   const travelStyle = {
     '--start-x': `${geometry.start.x}px`,
     '--start-y': `${geometry.start.y}px`,
@@ -247,6 +297,14 @@ export function SystemStage({
         </div>
       </header>
 
+      <div className="starting-state" aria-label="State before this deployment">
+        <span>Before this flow</span>
+        <strong>Builder App already exists</strong>
+        <i>GitHub source configured</i>
+        <i>{scenario.hasExistingRuntime ? `${scenario.oldVersion} currently active` : 'No active AppVersion'}</i>
+        {!scenario.hasExistingRuntime ? <i>No YARP backend assigned</i> : null}
+      </div>
+
       <div className="transfer-brief" aria-live="polite">
         <div>
           <span>{isAnimating ? 'Moving now' : 'Moving'}</span>
@@ -259,7 +317,7 @@ export function SystemStage({
       </div>
 
       <div className="stage-scroll">
-        <div className="system-stage">
+        <div className={`system-stage ${scenario.hasExistingRuntime ? '' : 'is-first-deploy'} ${cutover === 'active' ? 'is-first-live' : ''}`}>
           <div className="stage-zone zone-control"><span>Control plane</span></div>
           <div className="stage-zone zone-source"><span>GitHub source</span></div>
           <div className="stage-zone zone-build"><span>Build and outputs</span></div>
@@ -274,9 +332,13 @@ export function SystemStage({
               <marker id="green-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
                 <path d="M0 0 L8 4 L0 8 Z" />
               </marker>
+              <marker id="idle-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+                <path d="M0 0 L8 4 L0 8 Z" />
+              </marker>
             </defs>
-            <path className="customer-line" d="M 185 566 C 220 566, 250 572, 286 572" markerEnd="url(#green-arrow)" />
-            <path className={`provider-line old tone-${provider.oldTone}`} d="M 422 572 C 448 572, 466 552, 492 552" markerEnd="url(#green-arrow)" />
+            <circle className={`route-halo ${routeLive ? 'is-live' : ''}`} cx="354" cy="572" r="48" />
+            <path className={`customer-line tone-${routeLive ? 'serving' : 'empty'}`} d="M 185 566 C 220 566, 250 572, 286 572" markerEnd={routeLive ? 'url(#green-arrow)' : 'url(#idle-arrow)'} />
+            <path className={`provider-line old tone-${provider.oldTone}`} d="M 422 572 C 448 572, 466 552, 492 552" markerEnd={scenario.hasExistingRuntime ? 'url(#green-arrow)' : undefined} />
             <path className={`provider-line next tone-${provider.nextTone}`} d="M 422 572 C 550 450, 720 450, 844 552" markerEnd="url(#green-arrow)" />
             {step ? (
               <path
@@ -294,6 +356,7 @@ export function SystemStage({
               id={node.id}
               scenario={scenario}
               step={step}
+              completedCount={stepIndex}
               selected={selectedNode === node.id}
               cutover={cutover}
               onSelect={onSelectNode}
