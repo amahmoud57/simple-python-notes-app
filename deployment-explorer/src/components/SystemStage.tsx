@@ -81,12 +81,46 @@ const point = (id: NodeId) => {
   return { x: node.x + 68, y: node.y + 34 }
 }
 
-function pathBetween(source: NodeId, target: NodeId): string {
-  const start = point(source)
-  const end = point(target)
+const machineSize: Partial<Record<NodeId, { width: number; height: number }>> = {
+  manifest: { width: 88, height: 82 },
+  version: { width: 136, height: 68 },
+  blob: { width: 136, height: 66 },
+  health: { width: 72, height: 72 },
+}
+
+function edgePoint(id: NodeId, toward: { x: number; y: number }) {
+  const center = point(id)
+  const size = machineSize[id] ?? { width: 136, height: 58 }
+  const deltaX = toward.x - center.x
+  const deltaY = toward.y - center.y
+  const length = Math.hypot(deltaX, deltaY) || 1
+  const unitX = deltaX / length
+  const unitY = deltaY / length
+  const horizontalDistance = Math.abs(unitX) < 0.001
+    ? Number.POSITIVE_INFINITY
+    : size.width / 2 / Math.abs(unitX)
+  const verticalDistance = Math.abs(unitY) < 0.001
+    ? Number.POSITIVE_INFINITY
+    : size.height / 2 / Math.abs(unitY)
+  const distance = Math.min(horizontalDistance, verticalDistance) + 14
+  return {
+    x: center.x + unitX * distance,
+    y: center.y + unitY * distance,
+  }
+}
+
+function transferGeometry(source: NodeId, target: NodeId) {
+  const sourceCenter = point(source)
+  const targetCenter = point(target)
+  const start = edgePoint(source, targetCenter)
+  const end = edgePoint(target, sourceCenter)
   const bend = Math.max(58, Math.abs(end.x - start.x) * 0.42)
   const direction = end.x >= start.x ? 1 : -1
-  return `M ${start.x} ${start.y} C ${start.x + direction * bend} ${start.y}, ${end.x - direction * bend} ${end.y}, ${end.x} ${end.y}`
+  return {
+    start,
+    end,
+    path: `M ${start.x} ${start.y} C ${start.x + direction * bend} ${start.y}, ${end.x - direction * bend} ${end.y}, ${end.x} ${end.y}`,
+  }
 }
 
 function providerState(cutover: CutoverState, scenario: Scenario) {
@@ -181,16 +215,16 @@ export function SystemStage({
   selectedNode,
   onSelectNode,
 }: SystemStageProps) {
-  const currentPath = step ? pathBetween(step.source, step.target) : ''
-  const sourcePoint = step ? point(step.source) : point('client')
-  const targetPoint = step ? point(step.target) : point('arm')
+  const geometry = step
+    ? transferGeometry(step.source, step.target)
+    : transferGeometry('client', 'arm')
   const PayloadIcon = step ? payloadIcon[step.payloadKind] : CloudCog
   const provider = providerState(cutover, scenario)
   const travelStyle = {
-    '--start-x': `${sourcePoint.x}px`,
-    '--start-y': `${sourcePoint.y}px`,
-    '--end-x': `${targetPoint.x}px`,
-    '--end-y': `${targetPoint.y}px`,
+    '--start-x': `${geometry.start.x}px`,
+    '--start-y': `${geometry.start.y}px`,
+    '--end-x': `${geometry.end.x}px`,
+    '--end-y': `${geometry.end.y}px`,
     '--travel-duration': `${motionDurationMs}ms`,
   } as CSSProperties
 
@@ -248,7 +282,7 @@ export function SystemStage({
               <path
                 key={`${scenario.id}-${step.id}`}
                 className={`active-transfer ${isAnimating ? 'is-moving' : ''}`}
-                d={currentPath}
+                d={geometry.path}
                 markerEnd="url(#flow-arrow)"
               />
             ) : null}
@@ -273,7 +307,6 @@ export function SystemStage({
               aria-hidden="true"
             >
               <PayloadIcon size={16} />
-              <span>{step.payload}</span>
             </div>
           ) : null}
 

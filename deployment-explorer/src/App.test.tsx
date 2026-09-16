@@ -17,6 +17,10 @@ describe('Deployment Explorer', () => {
     expect(screen.getByText('202 Accepted + Azure-AsyncOperation URL')).toBeInTheDocument()
     expect(container.querySelector('.destination-note')).not.toBeInTheDocument()
     expect(container.querySelectorAll('.transfer-brief > div')).toHaveLength(2)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Step' }))
+    expect(container.querySelector('.travel-payload')).toBeInTheDocument()
+    expect(container.querySelector('.travel-payload span')).not.toBeInTheDocument()
   })
 
   it('opens an evolving example and API details for AppVersion', () => {
