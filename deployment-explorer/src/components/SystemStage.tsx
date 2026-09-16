@@ -233,6 +233,12 @@ function NodeButton({
         ? deploymentCreated
           ? deploymentStatus
           : { text: 'Not created', tone: 'idle' }
+        : id === 'customer'
+          ? !scenario.hasExistingRuntime && !['switched', 'verified', 'active'].includes(cutover)
+            ? { text: 'No route yet', tone: 'idle' }
+            : cutover === 'verified' || cutover === 'active' || cutover === 'draining'
+              ? { text: 'Public route verified', tone: 'serving' }
+              : { text: scenario.hasExistingRuntime ? 'Stable app URL' : 'Route created', tone: 'existing' }
         : undefined
   const status = id === 'existing'
     ? provider.old

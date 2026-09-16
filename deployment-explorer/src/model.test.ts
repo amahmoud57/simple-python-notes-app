@@ -60,6 +60,16 @@ describe('deployment model', () => {
     expect(readyStep?.reason).toContain('at least one immutable output')
   })
 
+  it('defines AppVersion building as immutable output production, not runtime deployment', () => {
+    const buildStep = getScenario('manual').steps.find((step) => step.id === 'start-version-build')
+
+    expect(buildStep?.title).toBe('Begin producing deployable outputs')
+    expect(buildStep?.reason).toContain('versioned Blob assets for static components')
+    expect(buildStep?.reason).toContain('digest-pinned OCI image for compute')
+    expect(buildStep?.reason).toContain('does not create runtime resources or move traffic')
+    expect(buildStep?.result).toContain('runtime remains unchanged')
+  })
+
   it('tracks the old provider through candidate, switch, drain, and deletion', () => {
     const scenario = getScenario('update')
     const countAfter = (id: string) => scenario.steps.findIndex((step) => step.id === id) + 1
@@ -114,7 +124,31 @@ describe('deployment model', () => {
     expect(getCutoverState(scenario, countAfter('activate-route'))).toBe('switched')
     expect(getCutoverState(scenario, scenario.steps.length)).toBe('active')
     expect(getNodeExample('existing', scenario, 0, 'empty').body).toContain('no Artifact App exists yet')
-    expect(getNodeExample('route', scenario, 0, 'empty').body).toContain('"state": "unassigned"')
+    expect(getNodeExample('route', scenario, 0, 'empty').body).toContain('"state": "not created"')
+  })
+
+  it('generates the customer hostname at route activation and persists it after verification', () => {
+    const scenario = getScenario('manual')
+    const activateIndex = scenario.steps.findIndex((step) => step.id === 'activate-route')
+    const promoteIndex = scenario.steps.findIndex((step) => step.id === 'promote-runtime')
+    const hostname = 'deployment-explorer-demo-c25af3b6.app.westus2.amahmoud11.embr-test.windows-int.net'
+
+    const beforeRoute = getNodeExample('customer', scenario, 0, 'empty').body
+    expect(beforeRoute).toContain('"generatedBy": "SubdomainHelper.ComputeAppSubdomain"')
+    expect(beforeRoute).toContain('"appIdSuffix": "c25af3b6"')
+    expect(beforeRoute).toContain('"routeState": "not created yet"')
+
+    const route = getNodeExample('route', scenario, activateIndex + 1, 'switched').body
+    expect(route).toContain(`"subdomain": "${hostname}"`)
+
+    const operation = getNodeExample('deployment', scenario, activateIndex + 1, 'switched').body
+    expect(operation).toContain(`"publicUrl": "https://${hostname}"`)
+
+    const beforePromotion = getNodeExample('app', scenario, promoteIndex, 'verified').body
+    expect(beforePromotion).toContain('"runtime": null')
+
+    const promoted = getNodeExample('app', scenario, promoteIndex + 1, 'active').body
+    expect(promoted).toContain(`"url": "https://${hostname}"`)
   })
 
   it('evolves AppVersion from absent to manifest-backed to ready outputs', () => {

@@ -85,6 +85,7 @@ describe('Deployment Explorer', () => {
     const { container } = render(<App />)
 
     expect(container.querySelector('.traffic-routing')).toHaveAttribute('data-route-target', 'none')
+    expect(screen.getByRole('button', { name: 'Inspect Customer URL' })).toHaveTextContent('No route yet')
     expect(container.querySelector('.yarp-backend-route')).not.toBeInTheDocument()
     expect(container.querySelector('.candidate-health-gate')).toHaveAttribute('data-health-state', 'absent')
     expect(screen.queryByRole('button', { name: 'Inspect Direct health check' })).not.toBeInTheDocument()
@@ -97,6 +98,10 @@ describe('Deployment Explorer', () => {
     fireEvent.click(next)
     expect(container.querySelector('.traffic-routing')).toHaveAttribute('data-route-target', 'candidate')
     expect(container.querySelectorAll('.yarp-backend-route')).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'Inspect Customer URL' })).toHaveTextContent('Route created')
+
+    fireEvent.click(next)
+    expect(screen.getByRole('button', { name: 'Inspect Customer URL' })).toHaveTextContent('Public route verified')
 
     fireEvent.click(screen.getByRole('tab', { name: 'Manual update' }))
     expect(container.querySelector('.traffic-routing')).toHaveAttribute('data-route-target', 'existing')

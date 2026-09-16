@@ -135,7 +135,7 @@ export const nodes: SystemNode[] = [
   { id: 'candidate', label: 'Artifact App candidate', eyebrow: 'New provider', x: 880, y: 380, group: 'runtime' },
   { id: 'existing', label: 'Existing Artifact App', eyebrow: 'Current provider', x: 690, y: 510, group: 'runtime' },
   { id: 'route', label: 'YARP route', eyebrow: 'Active backend pointer', x: 320, y: 530, group: 'traffic' },
-  { id: 'customer', label: 'Customer URL', eyebrow: 'Public request', x: 54, y: 530, group: 'traffic' },
+  { id: 'customer', label: 'Customer URL', eyebrow: 'Embr-generated hostname', x: 54, y: 530, group: 'traffic' },
 ]
 
 type FlowStepDefinition = Omit<FlowStep, 'executionSurface'> & {
@@ -146,6 +146,9 @@ const step = (value: FlowStepDefinition): FlowStep => ({
   ...value,
   executionSurface: value.executionSurface ?? 'internal',
 })
+
+const demoCustomerHostname = 'deployment-explorer-demo-c25af3b6.app.westus2.amahmoud11.embr-test.windows-int.net'
+const demoCustomerUrl = `https://${demoCustomerHostname}`
 
 const createDeploymentStep = (deploymentId: string, appVersionId: string): FlowStep => step({
   id: 'create-deployment',
@@ -212,13 +215,13 @@ const sourceBuildSteps = (
   step({
     id: 'start-version-build',
     phase: 'building',
-    title: 'Start building the AppVersion',
+    title: 'Begin producing deployable outputs',
     source: 'deployment',
     target: 'version',
-    payload: `build operation for ${appVersionId}`,
+    payload: 'exact source + builder.yaml component plan',
     payloadKind: 'build',
-    reason: 'The operation changes from pending to building, acquires the AppVersion build lease, and changes the first component from pending to building.',
-    result: `Operation ${deploymentId}: building; AppVersion ${appVersionId}: building`,
+    reason: 'Building an AppVersion turns its pinned source into immutable outputs for every component: versioned Blob assets for static components and a digest-pinned OCI image for compute. It does not create runtime resources or move traffic.',
+    result: `Operation ${deploymentId}: building; AppVersion ${appVersionId}: building; runtime remains unchanged`,
     api: 'Status = AppDeploymentStatus.Building -> EnsureVersionReadyAsync -> TryAcquireAsync',
   }),
   step({
@@ -336,15 +339,19 @@ const sourceBuildSteps = (
     phase: 'activating',
     title: hasExistingRuntime
       ? 'Atomically switch YARP to the new version'
-      : 'Assign YARP to the first version',
+      : 'Generate the app URL and create its YARP route',
     source: 'regional',
     target: 'route',
-    payload: 'complete route document',
+    payload: hasExistingRuntime
+      ? 'existing hostname + replacement route document'
+      : 'app name + app ID suffix + routing domain + route document',
     payloadKind: 'route',
-    reason: 'Static paths, compute mounts, auth, and AppVersion identity must change together.',
+    reason: hasExistingRuntime
+      ? 'The Builder App keeps its stable Embr hostname. YARP atomically replaces that hostname route so static paths, compute mounts, auth, and AppVersion identity all move together.'
+      : 'Embr derives a stable hostname from the Builder App name, the last eight characters of its app ID, and the stamp routing domain, then creates the first YARP route for it.',
     result: hasExistingRuntime
-      ? `YARP targets ${versionLabel}; the previous provider is retained`
-      : `YARP now targets ${versionLabel}; the first public route is live`,
+      ? `${demoCustomerHostname} now routes to ${versionLabel}; the previous provider is retained`
+      : `YARP route created: ${demoCustomerHostname} → ${versionLabel}`,
     api: 'IYarpClient.ActivateAppRouteAsync(routeMutationFence, staticRouting, vms, backendPrefixes)',
     executionSurface: 'nonArmApi',
     cutoverAfter: 'switched',
@@ -357,9 +364,9 @@ const sourceBuildSteps = (
     target: 'route',
     payload: 'GET /api/health',
     payloadKind: 'health',
-    reason: 'Direct health is insufficient. Embr must prove that the public route converged.',
-    result: `X-Embr-App-Version: ${appVersionId}`,
-    api: 'GET https://shop.embr.example/api/health',
+    reason: 'Embr calls the generated hostname through YARP. The response must be healthy and identify the expected AppVersion, proving the public route converged.',
+    result: `HTTP 200 + X-Embr-App-Version: ${appVersionId}`,
+    api: `GET ${demoCustomerUrl}/api/health`,
     executionSurface: 'nonArmApi',
     cutoverAfter: 'verified',
   }),
@@ -373,8 +380,8 @@ const sourceBuildSteps = (
           target: 'app',
           payload: `activeDeploymentId: ${deploymentId}`,
           payloadKind: 'route',
-          reason: 'Builder App changes its active runtime only after public verification succeeds.',
-          result: `${versionLabel} active; the previous provider drains for a 5 minute grace period`,
+          reason: 'Only after the generated hostname succeeds through YARP does Embr persist the new active deployment and the same URL on BuilderApp.runtime.',
+          result: `${versionLabel} active at the unchanged customer URL; the previous provider drains for a 5 minute grace period`,
           api: `IBuilderAppRepository.UpdateWithRetryAsync(runtime.activeDeploymentId = ${deploymentId})`,
           cutoverAfter: 'draining',
         }),
@@ -403,8 +410,8 @@ const sourceBuildSteps = (
           target: 'app',
           payload: `activeDeploymentId: ${deploymentId}`,
           payloadKind: 'route',
-          reason: 'Builder App records its first active runtime only after public verification succeeds.',
-          result: `${versionLabel} active; there is no predecessor to drain or delete`,
+          reason: 'Only after the generated hostname succeeds through YARP does Embr create BuilderApp.runtime and persist its URL and active deployment ID.',
+          result: `BuilderApp.runtime.url saved; ${versionLabel} is active and there is no predecessor to delete`,
           api: `IBuilderAppRepository.UpdateWithRetryAsync(runtime.activeDeploymentId = ${deploymentId})`,
           cutoverAfter: 'active',
         }),
@@ -771,7 +778,7 @@ const apiByNode: Record<NodeId, string> = {
   candidate: 'PUT | GET | DELETE .../providers/Microsoft.App/artifactApps/{name}\nGET https://{candidateFqdn}/{run.healthCheckPath}\nAppEndpointProbe.WaitForHealthyAsync',
   existing: 'IAppRouteActivator.ActivateAsync(previousVersion)\nDELETE old artifactApps + artifacts after grace',
   route: 'IYarpClient.ActivateAppRouteAsync\nIYarpClient.GetAppAsync\nCosmos ReplaceItemAsync(IfMatchEtag)',
-  customer: 'GET https://{app-subdomain}/{run.healthCheckPath}\nExpect X-Embr-App-Version',
+  customer: 'SubdomainHelper.ComputeAppSubdomain(app.Name, app.Id, routingDomain)\n  -> {sanitized-name}-{last-8-of-app-id}.{routingDomain}\n\nAppRouteActivator.ActivateAsync\n  -> IYarpClient.ActivateAppRouteAsync(subdomain, destinations)\n\nGET https://{generated-hostname}/{healthCheckPath}\n  -> expect X-Embr-App-Version\n\nAfter verification: BuilderApp.runtime.url = https://{generated-hostname}',
 }
 
 export function getNodeApi(id: NodeId): string {
@@ -858,9 +865,9 @@ export function getNodeExample(
       }
     case 'deployment':
       if (!deploymentCreated) return { title: 'Deployment before creation', format: 'JSON', body: json({ id: deploymentId, state: 'not created yet', waitingFor: 'validated Builder App configuration and trigger metadata' }) }
-      return { title: 'BuilderAppDeployment operation document', format: 'JSON', body: json({ id: deploymentId, appId: 'app_shop', appVersionId: versionId, status: deploymentStatus, action: scenario.id === 'manual' || scenario.id === 'update' ? 'deploy' : scenario.id, candidateFqdn: candidateCreated ? candidateFqdn : undefined, publicUrl: switched ? 'https://deployment-explorer-demo.example' : undefined, previousDeploymentId: scenario.hasExistingRuntime ? 'adp_previous' : undefined, completedAt: completedCount === scenario.steps.length ? '2026-09-16T18:42:31Z' : undefined }) }
+      return { title: 'BuilderAppDeployment operation document', format: 'JSON', body: json({ id: deploymentId, appId: 'app_shop', appVersionId: versionId, status: deploymentStatus, action: scenario.id === 'manual' || scenario.id === 'update' ? 'deploy' : scenario.id, candidateFqdn: candidateCreated ? candidateFqdn : undefined, publicUrl: switched ? demoCustomerUrl : undefined, previousDeploymentId: scenario.hasExistingRuntime ? 'adp_previous' : undefined, completedAt: completedCount === scenario.steps.length ? '2026-09-16T18:42:31Z' : undefined }) }
     case 'app':
-      return { title: 'Pre-existing Microsoft.Web/builderApps resource', format: 'JSON', body: json({ name: 'deployment-explorer-demo', type: 'Microsoft.Web/builderApps', properties: { lifecycleId: 'alc_31', sourceIntegrationState: 'Configured', pendingDeploymentId: appReserved && !promoted ? deploymentId : null, runtime: { activeDeploymentId: promoted ? deploymentId : scenario.hasExistingRuntime ? 'adp_previous' : null, activeAppVersionId: promoted ? versionId : scenario.oldVersion, url: 'https://deployment-explorer-demo.example' } } }) }
+      return { title: 'Pre-existing Microsoft.Web/builderApps resource', format: 'JSON', body: json({ name: 'deployment-explorer-demo', type: 'Microsoft.Web/builderApps', properties: { lifecycleId: 'alc_31', sourceIntegrationState: 'Configured', pendingDeploymentId: appReserved && !promoted ? deploymentId : null, runtime: promoted ? { activeDeploymentId: deploymentId, activeAppVersionId: versionId, url: demoCustomerUrl } : scenario.hasExistingRuntime ? { activeDeploymentId: 'adp_previous', activeAppVersionId: scenario.oldVersion, url: demoCustomerUrl } : null } }) }
     case 'github':
       return { title: 'GitHub source identity', format: 'JSON', body: json({ provider: 'github', id: '1211637325', displayName: 'amahmoud57/simple-python-notes-app', reference: 'demo/builder-deployment-explorer', revision: '9f42c1e4a77b81f6d49d3c2a...' }) }
     case 'manifest':
@@ -909,9 +916,9 @@ export function getNodeExample(
       if (!scenario.hasExistingRuntime) return { title: 'Runtime before first deployment', format: 'JSON', body: json({ resourceId: null, appVersionId: null, state: 'no Artifact App exists yet', servingCustomerTraffic: false }) }
       return { title: 'Existing Artifact App', format: 'JSON', body: json({ appVersionId: scenario.oldVersion, resourceId: '/subscriptions/runtime-sub/resourceGroups/runtime-rg/providers/Microsoft.App/artifactApps/embr-existing', servingCustomerTraffic: !switched, state: cutover === 'deleted' ? 'deleted' : cutover === 'deleting' ? 'deleting' : promoted ? 'draining' : 'serving' }) }
     case 'route':
-      return { title: 'YARP route document', format: 'JSON', body: json({ ownerId: 'app_shop', state: switched || scenario.hasExistingRuntime ? 'assigned' : 'unassigned', appVersionId: switched ? versionId : scenario.oldVersion, subdomain: 'deployment-explorer-demo.example', vms: switched ? [`https://${candidateFqdn}/`] : scenario.hasExistingRuntime ? ['https://embr-existing.westus3.azurecontainerapps.io/'] : [], backendPrefixes: switched || scenario.hasExistingRuntime ? ['/api/'] : [], staticRouting: switched ? { reference: staticReference } : scenario.hasExistingRuntime ? { reference: 'static-assets/app_shop/ver_previous/web/site' } : null, routeMutationFence: switched || scenario.hasExistingRuntime ? { routeEpoch: 24, executionEpoch: switched ? 3 : 2, step: 1 } : null }) }
+      return { title: 'YARP route document', format: 'JSON', body: json({ ownerId: 'app_shop', state: switched || scenario.hasExistingRuntime ? 'assigned' : 'not created', hostnameGeneratedBy: 'SubdomainHelper.ComputeAppSubdomain(appName, appId, routingDomain)', subdomain: switched || scenario.hasExistingRuntime ? demoCustomerHostname : null, appVersionId: switched ? versionId : scenario.oldVersion, vms: switched ? [`https://${candidateFqdn}/`] : scenario.hasExistingRuntime ? ['https://embr-existing.westus3.azurecontainerapps.io/'] : [], backendPrefixes: switched || scenario.hasExistingRuntime ? ['/api/'] : [], staticRouting: switched ? { reference: staticReference } : scenario.hasExistingRuntime ? { reference: 'static-assets/app_shop/ver_previous/web/site' } : null, routeMutationFence: switched || scenario.hasExistingRuntime ? { routeEpoch: 24, executionEpoch: switched ? 3 : 2, step: 1 } : null }) }
     case 'customer':
-      if (!scenario.hasExistingRuntime && !switched) return { title: 'Customer URL before first activation', format: 'HTTP', body: 'GET https://deployment-explorer-demo.example/api/health\n\nNo active YARP route is assigned yet.' }
-      return { title: 'Customer route response', format: 'HTTP', body: `GET https://deployment-explorer-demo.example/api/health\n\nHTTP/1.1 200 OK\nX-Embr-App-Version: ${switched ? versionId : scenario.oldVersion}` }
+      if (!scenario.hasExistingRuntime && !switched) return { title: 'Generated hostname before route activation', format: 'JSON', body: json({ generatedBy: 'SubdomainHelper.ComputeAppSubdomain', inputs: { appName: 'deployment-explorer-demo', appIdSuffix: 'c25af3b6', routingDomain: 'app.westus2.amahmoud11.embr-test.windows-int.net' }, hostname: demoCustomerHostname, routeState: 'not created yet', reachable: false }) }
+      return { title: 'Customer route response', format: 'HTTP', body: `GET ${demoCustomerUrl}/api/health\n\nHTTP/1.1 200 OK\nX-Embr-App-Version: ${switched ? versionId : scenario.oldVersion}` }
   }
 }
