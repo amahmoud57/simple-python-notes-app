@@ -51,7 +51,8 @@ describe('deployment model', () => {
   it('evolves AppVersion from absent to manifest-backed to ready outputs', () => {
     const scenario = getScenario('manual')
     const createIndex = scenario.steps.findIndex((step) => step.id === 'create-version')
-    const readyIndex = scenario.steps.findIndex((step) => step.id === 'seal-version')
+    const buildIndex = scenario.steps.findIndex((step) => step.id === 'start-version-build')
+    const readyIndex = scenario.steps.findIndex((step) => step.id === 'finish-version-build')
 
     expect(getNodeExample('version', scenario, createIndex, 'empty').body).toContain('not created yet')
 
@@ -60,22 +61,34 @@ describe('deployment model', () => {
     expect(created).toContain('9f42c1e4a77')
     expect(created).toContain('"status": "pending"')
 
+    const building = getNodeExample('version', scenario, buildIndex + 1, 'empty').body
+    expect(building).toContain('"status": "building"')
+
     const ready = getNodeExample('version', scenario, readyIndex + 1, 'empty').body
     expect(ready).toContain('"status": "ready"')
-    expect(ready).toContain('static-assets/app_shop/avp_1/web/site')
+    expect(ready).toContain('static-assets/app_shop/ver_demo/web/site')
     expect(ready).toContain('@sha256:71ab42d9c508')
   })
 
-  it('starts from an existing Builder App and creates AppVersion before Deployment', () => {
+  it('creates the pending Deployment before admitting the app and creating its AppVersion', () => {
     const scenario = getScenario('manual')
     const ids = scenario.steps.map((step) => step.id)
     const reserveIndex = ids.indexOf('reserve-app')
     const versionIndex = ids.indexOf('create-version')
     const deploymentIndex = ids.indexOf('create-deployment')
+    const resolveIndex = ids.indexOf('resolve-revision')
+    const buildIndex = ids.indexOf('start-version-build')
+    const readyIndex = ids.indexOf('finish-version-build')
+    const provisionIndex = ids.indexOf('import-artifact')
 
     expect(reserveIndex).toBeGreaterThan(-1)
+    expect(deploymentIndex).toBeLessThan(reserveIndex)
     expect(reserveIndex).toBeLessThan(versionIndex)
-    expect(versionIndex).toBeLessThan(deploymentIndex)
+    expect(reserveIndex).toBeLessThan(resolveIndex)
+    expect(resolveIndex).toBeLessThan(versionIndex)
+    expect(versionIndex).toBeLessThan(buildIndex)
+    expect(buildIndex).toBeLessThan(readyIndex)
+    expect(readyIndex).toBeLessThan(provisionIndex)
 
     const initialApp = getNodeExample('app', scenario, 0, 'empty').body
     expect(initialApp).toContain('"sourceIntegrationState": "Configured"')
@@ -86,10 +99,13 @@ describe('deployment model', () => {
 
     const beforeDeployment = getNodeExample('deployment', scenario, deploymentIndex, 'empty').body
     expect(beforeDeployment).toContain('"state": "not created yet"')
-    expect(beforeDeployment).toContain('AppVersion avp_1 is ready to reference')
 
     const deployment = getNodeExample('deployment', scenario, deploymentIndex + 1, 'empty').body
-    expect(deployment).toContain('"appVersionId": "avp_1"')
+    expect(deployment).toContain('"appVersionId": "ver_demo"')
+    expect(deployment).toContain('"status": "pending"')
+
+    const reservedVersion = getNodeExample('version', scenario, deploymentIndex + 1, 'empty').body
+    expect(reservedVersion).toContain('ID reserved by the pending Deployment')
   })
 
   it('names the authenticated ARM identity fields instead of using an ambiguous caller label', () => {

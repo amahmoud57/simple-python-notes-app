@@ -11,8 +11,11 @@ describe('Deployment Explorer', () => {
   it('explains each transfer without covering the system stage', () => {
     const { container } = render(<App />)
 
-    expect(screen.getByText('Moving')).toBeInTheDocument()
-    expect(screen.getByText('After this step')).toBeInTheDocument()
+    expect(screen.getByText('What happens now')).toBeInTheDocument()
+    expect(screen.getByText('State after this step')).toBeInTheDocument()
+    expect(screen.getByText(/customer explicitly asks Builder Apps/)).toBeInTheDocument()
+    expect(container.querySelector('.transfer-route')).toHaveTextContent('Builder CLI')
+    expect(container.querySelector('.transfer-route')).toHaveTextContent('ARM API')
     expect(screen.getByText('Builder App already exists')).toBeInTheDocument()
     expect(screen.getByText('No active AppVersion')).toBeInTheDocument()
     expect(screen.getByText('No YARP backend assigned')).toBeInTheDocument()
@@ -53,6 +56,6 @@ describe('Deployment Explorer', () => {
 
     expect(screen.getByRole('heading', { name: 'Request a retained-version redeploy' })).toBeInTheDocument()
     expect(screen.queryByText('Resolve main to an exact commit')).not.toBeInTheDocument()
-    expect(screen.getByText('Validate retained AppVersion avp_17')).toBeInTheDocument()
+    expect(screen.getByText('Validate retained AppVersion ver_17')).toBeInTheDocument()
   })
 })

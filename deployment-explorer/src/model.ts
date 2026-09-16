@@ -19,6 +19,7 @@ export type NodeId =
 
 export type Phase =
   | 'pending'
+  | 'preparing'
   | 'building'
   | 'provisioning'
   | 'healthChecking'
@@ -96,6 +97,7 @@ export interface ExampleDocument {
 
 export const phaseLabels: Record<Phase, string> = {
   pending: 'Pending',
+  preparing: 'Preparing source',
   building: 'Building',
   provisioning: 'Provisioning',
   healthChecking: 'Health check',
@@ -128,14 +130,14 @@ const step = (value: FlowStep): FlowStep => value
 
 const createDeploymentStep = (deploymentId: string, appVersionId: string): FlowStep => step({
   id: 'create-deployment',
-  phase: 'building',
-  title: 'Create the Deployment referencing the AppVersion',
+  phase: 'pending',
+  title: 'Create the pending Deployment record',
   source: 'regional',
   target: 'deployment',
-  payload: 'AppVersion ID + runtime settings snapshot',
+  payload: `${deploymentId} + reserved AppVersion ID ${appVersionId}`,
   payloadKind: 'resource',
-  reason: 'The pending AppVersion now exists. The Deployment references it and copies the app settings used for this attempt.',
-  result: `Deployment ${deploymentId}: building, appVersionId: ${appVersionId}`,
+  reason: 'Regional writes the durable Deployment before the AppVersion exists. It preallocates the AppVersion ID and snapshots settings for this attempt.',
+  result: `Deployment ${deploymentId}: pending; AppVersion ${appVersionId}: not created yet`,
   api: 'IBuilderAppDeploymentRepository.CreateAsync(deployment with { AppVersionId = versionId })',
 })
 
@@ -150,43 +152,54 @@ const sourceBuildSteps = (
     ? [
         step({
           id: 'resolve-revision',
-          phase: 'building',
-          title: 'Resolve main to an exact commit',
+          phase: 'preparing',
+          title: 'Resolve the configured branch to one commit',
           source: 'regional',
           target: 'github',
           payload: 'branch: main',
           payloadKind: 'request',
-          reason: 'A branch moves. The AppVersion must be pinned to one immutable revision.',
-          result: 'commit 9f42c1e4a77b...',
+          reason: 'Regional asks GitHub for the current SHA of branch main. The build must use one immutable commit, not a moving branch name.',
+          result: 'Source revision fixed at commit 9f42c1e4a77b...',
           api: 'GetBranchShaAsync(installationId, owner, repository, "main")',
         }),
       ]
     : []),
   step({
     id: 'read-manifest',
-    phase: 'building',
+    phase: 'preparing',
     title: 'Read and validate builder.yaml',
     source: 'github',
     target: 'manifest',
     payload: 'builder.yaml @ 9f42c1e',
     payloadKind: 'file',
-    reason: 'The manifest defines components, output directories, routes, and the health path.',
-    result: '2 validated components',
+    reason: 'Regional downloads builder.yaml at that exact commit and validates its components, routes, output directories, and health path.',
+    result: 'Manifest accepted: web static component + API compute component',
     api: 'GET /repos/contoso/shop/contents/builder.yaml?ref=9f42c1e...',
   }),
   step({
     id: 'create-version',
-    phase: 'building',
+    phase: 'preparing',
     title: 'Create the pending AppVersion',
     source: 'manifest',
     target: 'version',
     payload: 'builder.yaml + commit SHA',
     payloadKind: 'file',
-    reason: 'Source identity and the parsed component plan become one durable version record.',
-    result: `AppVersion ${appVersionId}: pending`,
-    api: 'IAppVersionService.CreatePendingFromReferenceAsync(appId, lifecycleId, versionId, environment)',
+    reason: 'Regional creates the AppVersion document from the resolved commit and validated manifest. Every component starts pending with no outputs.',
+    result: `AppVersion ${appVersionId}: pending; source and manifest are now immutable`,
+    api: 'IAppVersionService.CreatePendingFromReferenceAsync(appId, versionId)',
   }),
-  createDeploymentStep(deploymentId, appVersionId),
+  step({
+    id: 'start-version-build',
+    phase: 'building',
+    title: 'Start building the AppVersion',
+    source: 'deployment',
+    target: 'version',
+    payload: `build operation for ${appVersionId}`,
+    payloadKind: 'build',
+    reason: 'The Deployment changes from pending to building, acquires the AppVersion build lease, and changes the first component from pending to building.',
+    result: `Deployment ${deploymentId}: building; AppVersion ${appVersionId}: building`,
+    api: 'Status = AppDeploymentStatus.Building -> EnsureVersionReadyAsync -> TryAcquireAsync',
+  }),
   step({
     id: 'checkout-source',
     phase: 'building',
@@ -195,20 +208,20 @@ const sourceBuildSteps = (
     target: 'build',
     payload: 'source @ 9f42c1e',
     payloadKind: 'revision',
-    reason: 'Each component is built from the same detached revision in temporary ADC compute.',
-    result: 'source available at /app',
+    reason: 'The temporary ADC sandbox checks out the exact commit recorded on the AppVersion, so every component sees the same source tree.',
+    result: 'Commit 9f42c1e checked out at /app in the build sandbox',
     api: 'Sandboxes.ExecuteShellCommandAsync: git fetch --depth 1 $EMBR_CLONE_URL $EMBR_REVISION',
   }),
   step({
     id: 'build-components',
     phase: 'building',
-    title: 'Build the static and compute components',
+    title: 'Run each component build',
     source: 'version',
     target: 'build',
     payload: 'component build plan',
     payloadKind: 'build',
-    reason: 'Oryx executes the validated build adapters and discovers publishable outputs.',
-    result: 'static files + Python /output',
+    reason: 'Oryx runs the adapter selected for each manifest component and discovers the files or process output that component produced.',
+    result: 'Web build produced static files; API build produced a runnable Python output',
     api: 'ComponentBuildOrchestrator.ExecuteAsync -> ExecuteOryxBuildAsync -> DiscoverOutputsAsync',
   }),
   step({
@@ -219,8 +232,8 @@ const sourceBuildSteps = (
     target: 'blob',
     payload: '146 files + route manifest',
     payloadKind: 'static',
-    reason: 'YARP serves static paths from a versioned Blob prefix, not from the runtime container.',
-    result: `static-assets/app_shop/${appVersionId}/web/site`,
+    reason: 'The web component files are uploaded under an immutable versioned Blob prefix that YARP can serve directly.',
+    result: `Static output recorded at static-assets/app_shop/${appVersionId}/web/site`,
     api: 'azcopy copy /tmp/embr-static/* $EMBR_STATIC_SAS_URL --recursive --put-md5',
   }),
   step({
@@ -231,21 +244,21 @@ const sourceBuildSteps = (
     target: 'acr',
     payload: 'OCI build context',
     payloadKind: 'image',
-    reason: 'The Oryx output and entrypoint become a deployment-specific container image.',
-    result: 'api@sha256:71ab42d9c508...',
+    reason: 'The API component output and entrypoint are packaged as an OCI image and pushed to ACR by digest.',
+    result: 'Compute output recorded as api@sha256:71ab42d9c508...',
     api: 'POST {registryResourceId}/scheduleRun?api-version=2019-04-01',
   }),
   step({
-    id: 'seal-version',
+    id: 'finish-version-build',
     phase: 'building',
-    title: 'Seal the AppVersion as ready',
-    source: 'acr',
+    title: 'Mark the AppVersion ready when every component has output',
+    source: 'build',
     target: 'version',
-    payload: 'static reference + OCI digest',
+    payload: 'component resolutions + immutable output references',
     payloadKind: 'resource',
-    reason: 'Only a complete immutable deployment plan may be activated or retained for rollback.',
-    result: `AppVersion ${appVersionId}: ready`,
-    api: 'IBuilderAppVersionRepository.UpdateWithRetryAsync(build.status = ready, outputs = [...])',
+    reason: 'Build execution verifies that every manifest component has a resolved adapter and at least one output, then writes build.status=ready and completedAt.',
+    result: `AppVersion ${appVersionId}: ready; Deployment may now provision runtime resources`,
+    api: 'AppVersionBuildExecutionService.CompleteReadyAsync -> build.status = ready',
   }),
   step({
     id: 'import-artifact',
@@ -255,8 +268,8 @@ const sourceBuildSteps = (
     target: 'artifact',
     payload: 'digest-pinned image',
     payloadKind: 'image',
-    reason: 'ADC needs a Ready Artifact Version before it can create the new runtime candidate.',
-    result: 'ADC Artifact Version 17: Ready',
+    reason: 'The Deployment reads the ready AppVersion compute digest and imports that image into ADC for runtime provisioning.',
+    result: 'ADC Artifact Version created from the recorded OCI digest: ready',
     api: 'PUT .../providers/Microsoft.App/artifacts/embr-{deploymentHash}',
   }),
   step({
@@ -394,18 +407,31 @@ const manualSteps: FlowStep[] = [
     api: 'StartAppDeploymentRequest { AppId, Trigger, ArmCaller }',
   }),
   step({
-    id: 'reserve-app',
+    id: 'validate-app',
     phase: 'pending',
-    title: 'Validate and reserve the existing Builder App',
+    title: 'Load and validate the Builder App configuration',
     source: 'regional',
     target: 'app',
-    payload: 'app_shop + deterministic deployment ID',
+    payload: 'Builder App ID: app_shop',
     payloadKind: 'resource',
-    reason: 'The Builder App already exists. Regional validates its source and claims its one pending deployment slot.',
-    result: 'BuilderApp.PendingDeploymentId = adp_demo',
-    api: 'GetByIdAsync -> sourceAuthorizer.RevalidateAsync -> TryAdmitDeploymentAsync',
+    reason: 'Regional loads the existing Builder App and checks that source configuration, source authorization, managed identity, and the runtime provider are available.',
+    result: 'Builder App configuration is valid; deployment ID adp_demo and AppVersion ID ver_demo are reserved',
+    api: 'GetByIdAsync -> ValidateAppConfiguration -> runtimeProvider.IsConfigured',
   }),
-  ...sourceBuildSteps(true, 'adp_demo', 'avp_1', 'v1', false),
+  createDeploymentStep('adp_demo', 'ver_demo'),
+  step({
+    id: 'reserve-app',
+    phase: 'pending',
+    title: 'Reserve the Builder App for this Deployment',
+    source: 'deployment',
+    target: 'app',
+    payload: 'pendingDeploymentId: adp_demo',
+    payloadKind: 'resource',
+    reason: 'ResumeAsync admits one non-terminal Deployment at a time by claiming the Builder App pendingDeploymentId slot.',
+    result: 'BuilderApp.pendingDeploymentId = adp_demo; this Deployment owns execution',
+    api: 'ResumeAsync -> AdmitAsync -> TryAdmitDeploymentAsync',
+  }),
+  ...sourceBuildSteps(true, 'adp_demo', 'ver_demo', 'v1', false),
 ]
 
 const pushSteps: FlowStep[] = [
@@ -434,22 +460,35 @@ const pushSteps: FlowStep[] = [
     api: 'ListBySourceAsync(github, repositoryId) -> TriggerAsync(sourceRevision)',
   }),
   step({
-    id: 'reserve-push-app',
+    id: 'validate-push-app',
     phase: 'pending',
-    title: 'Validate and reserve the existing Builder App',
+    title: 'Load and validate the matched Builder App',
     source: 'regional',
     target: 'app',
-    payload: 'app_shop + github:84721:9f42c1e',
+    payload: 'Builder App ID: app_shop',
     payloadKind: 'resource',
-    reason: 'The Builder App already exists. The exact push key reserves its pending deployment slot.',
-    result: 'BuilderApp.PendingDeploymentId = adp_push',
-    api: 'GetByIdAsync -> sourceAuthorizer.RevalidateAsync -> TryAdmitDeploymentAsync',
+    reason: 'Regional loads the matched Builder App and validates its deployment configuration before writing an operation record.',
+    result: 'Builder App configuration valid; IDs derived from github:84721:9f42c1e',
+    api: 'GetByIdAsync -> ValidateAppConfiguration -> AppDeploymentId.ForTrigger',
   }),
-  ...sourceBuildSteps(false, 'adp_push', 'avp_17', 'v17', true),
+  createDeploymentStep('adp_push', 'ver_push_9f42'),
+  step({
+    id: 'reserve-push-app',
+    phase: 'pending',
+    title: 'Reserve the Builder App for this Deployment',
+    source: 'deployment',
+    target: 'app',
+    payload: 'pendingDeploymentId: adp_push',
+    payloadKind: 'resource',
+    reason: 'The app pendingDeploymentId slot prevents two push or manual Deployments from executing concurrently.',
+    result: 'BuilderApp.pendingDeploymentId = adp_push; this Deployment owns execution',
+    api: 'ResumeAsync -> AdmitAsync -> TryAdmitDeploymentAsync',
+  }),
+  ...sourceBuildSteps(false, 'adp_push', 'ver_push_9f42', 'v17', true),
 ]
 
 const retainedSteps = (action: 'redeploy' | 'rollback'): FlowStep[] => {
-  const targetVersion = action === 'rollback' ? 'avp_15' : 'avp_17'
+  const targetVersion = action === 'rollback' ? 'ver_15' : 'ver_17'
   return [
     step({
       id: `${action}-request`,
@@ -457,7 +496,7 @@ const retainedSteps = (action: 'redeploy' | 'rollback'): FlowStep[] => {
       title: action === 'rollback' ? 'Request rollback to AppVersion v15' : 'Request a retained-version redeploy',
       source: 'client',
       target: 'arm',
-      payload: action === 'rollback' ? 'POST /rollback + avp_15' : 'POST /redeploy',
+      payload: action === 'rollback' ? 'POST /rollback + ver_15' : 'POST /redeploy',
       payloadKind: 'request',
       reason: action === 'rollback' ? 'The customer selects a historical immutable version.' : 'The customer asks for fresh runtime resources without rebuilding source.',
       result: '202 Accepted + operation URL',
@@ -610,11 +649,11 @@ export const scenarios: Scenario[] = [
     id: 'manual',
     label: 'First deploy',
     title: 'Build and activate version 1',
-    summary: 'The Builder App exists, but runtime is empty. Build v1, prove its first provider healthy, then assign the first YARP route.',
+    summary: 'A pending Deployment record is created first. It resolves source and builds AppVersion v1; runtime provisioning begins only after that version is ready.',
     hasExistingRuntime: false,
     oldVersion: null,
     newVersion: 'v1',
-    appVersionId: 'avp_1',
+    appVersionId: 'ver_demo',
     nodeLabels: { existing: 'No active provider', candidate: 'First Artifact App' },
     steps: manualSteps,
   },
@@ -626,7 +665,7 @@ export const scenarios: Scenario[] = [
     hasExistingRuntime: true,
     oldVersion: 'v16',
     newVersion: 'v17',
-    appVersionId: 'avp_17',
+    appVersionId: 'ver_push_9f42',
     nodeLabels: { client: 'GitHub push', arm: 'Webhook API' },
     steps: pushSteps,
   },
@@ -638,7 +677,7 @@ export const scenarios: Scenario[] = [
     hasExistingRuntime: true,
     oldVersion: 'v17-a',
     newVersion: 'v17-b',
-    appVersionId: 'avp_17',
+    appVersionId: 'ver_17',
     steps: retainedSteps('redeploy'),
   },
   {
@@ -649,7 +688,7 @@ export const scenarios: Scenario[] = [
     hasExistingRuntime: true,
     oldVersion: 'v17',
     newVersion: 'v15',
-    appVersionId: 'avp_15',
+    appVersionId: 'ver_15',
     steps: retainedSteps('rollback'),
   },
 ]
@@ -724,10 +763,24 @@ export function getNodeExample(
     || [...completedIds].some((item) => item.endsWith('-reserve-app'))
   const staticPublished = scenario.id === 'redeploy' || scenario.id === 'rollback' || completedIds.has('publish-static')
   const imagePublished = scenario.id === 'redeploy' || scenario.id === 'rollback' || completedIds.has('publish-image')
-  const versionReady = scenario.id === 'redeploy' || scenario.id === 'rollback' || completedIds.has('seal-version')
+  const versionBuilding = scenario.id === 'redeploy' || scenario.id === 'rollback' || completedIds.has('start-version-build')
+  const versionReady = scenario.id === 'redeploy' || scenario.id === 'rollback' || completedIds.has('finish-version-build')
   const candidateCreated = ['candidate', 'healthy', 'switched', 'verified', 'active', 'draining', 'deleting', 'deleted'].includes(cutover)
   const switched = ['switched', 'verified', 'active', 'draining', 'deleting', 'deleted'].includes(cutover)
   const promoted = ['active', 'draining', 'deleting', 'deleted'].includes(cutover)
+  const deploymentStatus = completedCount === scenario.steps.length
+    ? 'succeeded'
+    : promoted
+      ? 'cleaningUp'
+      : switched
+        ? 'activating'
+        : candidateCreated
+          ? 'provisioning'
+          : versionReady
+            ? 'provisioning'
+            : versionBuilding
+              ? 'building'
+              : 'pending'
   const image = `embr.azurecr.io/builder/app_shop/api@sha256:71ab42d9c508...`
   const candidateName = `embr-${deploymentId.replace('adp_', '')}-7c2f`
   const candidateFqdn = `${candidateName}.westus3.azurecontainerapps.io`
@@ -769,23 +822,50 @@ export function getNodeExample(
         }),
       }
     case 'deployment':
-      if (!deploymentCreated) return { title: 'Deployment before creation', format: 'JSON', body: json({ id: deploymentId, state: 'not created yet', waitingFor: versionCreated ? `AppVersion ${versionId} is ready to reference` : 'pending AppVersion creation' }) }
-      return { title: 'BuilderAppDeployment document', format: 'JSON', body: json({ id: deploymentId, appId: 'app_shop', appVersionId: versionId, status: completedCount === scenario.steps.length ? 'succeeded' : scenario.steps[completedCount]?.phase ?? 'pending', action: scenario.id === 'manual' || scenario.id === 'push' ? 'deploy' : scenario.id, candidateFqdn: candidateCreated ? candidateFqdn : undefined, publicUrl: switched ? 'https://deployment-explorer-demo.example' : undefined, previousDeploymentId: 'adp_previous', completedAt: completedCount === scenario.steps.length ? '2026-09-16T18:42:31Z' : undefined }) }
+      if (!deploymentCreated) return { title: 'Deployment before creation', format: 'JSON', body: json({ id: deploymentId, state: 'not created yet', waitingFor: 'validated Builder App configuration and trigger metadata' }) }
+      return { title: 'BuilderAppDeployment document', format: 'JSON', body: json({ id: deploymentId, appId: 'app_shop', appVersionId: versionId, status: deploymentStatus, action: scenario.id === 'manual' || scenario.id === 'push' ? 'deploy' : scenario.id, candidateFqdn: candidateCreated ? candidateFqdn : undefined, publicUrl: switched ? 'https://deployment-explorer-demo.example' : undefined, previousDeploymentId: scenario.hasExistingRuntime ? 'adp_previous' : undefined, completedAt: completedCount === scenario.steps.length ? '2026-09-16T18:42:31Z' : undefined }) }
     case 'app':
       return { title: 'Pre-existing Microsoft.Web/builderApps resource', format: 'JSON', body: json({ name: 'deployment-explorer-demo', type: 'Microsoft.Web/builderApps', properties: { lifecycleId: 'alc_31', sourceIntegrationState: 'Configured', pendingDeploymentId: appReserved && !promoted ? deploymentId : null, runtime: { activeDeploymentId: promoted ? deploymentId : scenario.hasExistingRuntime ? 'adp_previous' : null, activeAppVersionId: promoted ? versionId : scenario.oldVersion, url: 'https://deployment-explorer-demo.example' } } }) }
     case 'github':
       return { title: 'GitHub source identity', format: 'JSON', body: json({ provider: 'github', id: '1211637325', displayName: 'amahmoud57/simple-python-notes-app', reference: 'demo/builder-deployment-explorer', revision: '9f42c1e4a77b81f6d49d3c2a...' }) }
     case 'manifest':
-      return { title: 'builder.yaml', format: 'YAML', body: 'components:\n  - name: web\n    rootDirectory: deployment-explorer\n    path: /\n\n# Vite is detected from package.json\n# dist/ becomes immutable static output' }
+      return { title: 'builder.yaml', format: 'YAML', body: 'components:\n  - name: web\n    rootDirectory: frontend\n    path: /\n  - name: api\n    rootDirectory: backend\n    path: /api\n    run:\n      healthCheckPath: /health\n\n# web produces static output\n# api produces compute output' }
     case 'version':
-      if (!versionCreated) return { title: 'AppVersion before creation', format: 'JSON', body: json({ id: versionId, state: 'not created yet', createdFrom: ['exact GitHub revision', 'validated builder.yaml'] }) }
-      return { title: 'Evolving BuilderAppVersion document', format: 'JSON', body: json({ id: versionId, appId: 'app_shop', source: { provider: 'github', id: '1211637325', reference: 'demo/builder-deployment-explorer', revision: '9f42c1e4a77...' }, manifest: { file: 'builder.yaml', components: [{ name: 'web', type: 'static', rootDirectory: 'deployment-explorer', path: '/' }] }, build: { status: versionReady ? 'ready' : deploymentCreated ? 'building' : 'pending' }, outputs: [staticPublished ? { id: 'site', kind: 'static', reference: staticReference } : undefined, imagePublished ? { id: 'runtime', kind: 'compute', reference: image } : undefined].filter(Boolean) }) }
+      if (!versionCreated) return { title: 'AppVersion before creation', format: 'JSON', body: json({ id: versionId, state: deploymentCreated ? 'ID reserved by the pending Deployment; AppVersion document not created yet' : 'not created yet', createdFrom: ['exact GitHub revision', 'validated builder.yaml'] }) }
+      return {
+        title: 'Evolving BuilderAppVersion document',
+        format: 'JSON',
+        body: json({
+          id: versionId,
+          appId: 'app_shop',
+          source: { provider: 'github', id: '1211637325', reference: 'demo/builder-deployment-explorer', revision: '9f42c1e4a77...' },
+          manifest: { file: 'builder.yaml', components: [{ name: 'web', type: 'static', path: '/' }, { name: 'api', type: 'compute', path: '/api' }] },
+          build: {
+            status: versionReady ? 'ready' : versionBuilding ? 'building' : 'pending',
+            components: [
+              {
+                stepId: 'build:web',
+                name: 'web',
+                status: staticPublished ? 'ready' : versionBuilding ? 'building' : 'pending',
+                outputs: staticPublished ? [{ id: 'site', kind: 'static', reference: staticReference }] : [],
+              },
+              {
+                stepId: 'build:api',
+                name: 'api',
+                status: imagePublished ? 'ready' : staticPublished ? 'building' : 'pending',
+                outputs: imagePublished ? [{ id: 'runtime', kind: 'compute', reference: image }] : [],
+              },
+            ],
+            completedAt: versionReady ? '2026-09-16T18:41:52Z' : undefined,
+          },
+        }),
+      }
     case 'build':
-      return { title: 'Temporary ADC build sandbox', format: 'SHELL', body: `sandboxId: sbx_build_${versionId}\nstate: ${versionReady ? 'deleted after publication' : versionCreated ? 'building' : 'not created'}\n\ngit fetch --depth 1 "$EMBR_CLONE_URL" "$EMBR_REVISION"\nnpm ci\nnpm run build` }
+      return { title: 'Temporary ADC build sandbox', format: 'SHELL', body: `sandboxId: sbx_build_${versionId}\nstate: ${versionReady ? 'deleted after publication' : versionBuilding ? 'building' : 'not created'}\n\ngit fetch --depth 1 "$EMBR_CLONE_URL" "$EMBR_REVISION"\nnpm ci\nnpm run build` }
     case 'blob':
       return { title: 'Static output', format: 'JSON', body: json({ reference: staticReference, state: staticPublished ? 'complete' : 'not published', completionMarker: staticPublished, routes: staticPublished ? { exact: ['/index.html', '/assets/index.js'], spaFallback: '/index.html' } : undefined }) }
     case 'acr':
-      return { title: 'ACR Task output', format: 'JSON', body: json({ runId: 'ca_01J8A4M2Z7', status: imagePublished ? 'Succeeded' : 'NotStarted', image: imagePublished ? image : 'embr.azurecr.io/builder/app_shop/api:avp_17', digest: imagePublished ? 'sha256:71ab42d9c508...' : null }) }
+      return { title: 'ACR Task output', format: 'JSON', body: json({ runId: 'ca_01J8A4M2Z7', status: imagePublished ? 'Succeeded' : 'NotStarted', image: imagePublished ? image : `embr.azurecr.io/builder/app_shop/api:${versionId}`, digest: imagePublished ? 'sha256:71ab42d9c508...' : null }) }
     case 'artifact':
       return { title: 'Microsoft.App/artifacts resource', format: 'JSON', body: json({ id: `/subscriptions/runtime-sub/resourceGroups/runtime-rg/providers/Microsoft.App/artifacts/${candidateName}`, type: 'Microsoft.App/artifacts', properties: { provisioningState: candidateCreated ? 'Succeeded' : 'NotCreated', source: { kind: 'registry', imageUrl: image }, latestVersionState: candidateCreated ? 'Ready' : null } }) }
     case 'candidate':
@@ -796,7 +876,7 @@ export function getNodeExample(
       if (!scenario.hasExistingRuntime) return { title: 'Runtime before first deployment', format: 'JSON', body: json({ resourceId: null, appVersionId: null, state: 'no Artifact App exists yet', servingCustomerTraffic: false }) }
       return { title: 'Existing Artifact App', format: 'JSON', body: json({ appVersionId: scenario.oldVersion, resourceId: '/subscriptions/runtime-sub/resourceGroups/runtime-rg/providers/Microsoft.App/artifactApps/embr-existing', servingCustomerTraffic: !switched, state: cutover === 'deleted' ? 'deleted' : cutover === 'deleting' ? 'deleting' : promoted ? 'draining' : 'serving' }) }
     case 'route':
-      return { title: 'YARP route document', format: 'JSON', body: json({ ownerId: 'app_shop', state: switched || scenario.hasExistingRuntime ? 'assigned' : 'unassigned', appVersionId: switched ? versionId : scenario.oldVersion, subdomain: 'deployment-explorer-demo.example', vms: switched ? [`https://${candidateFqdn}/`] : scenario.hasExistingRuntime ? ['https://embr-existing.westus3.azurecontainerapps.io/'] : [], backendPrefixes: switched || scenario.hasExistingRuntime ? ['/api/'] : [], staticRouting: switched ? { reference: staticReference } : scenario.hasExistingRuntime ? { reference: 'static-assets/app_shop/avp_previous/web/site' } : null, routeMutationFence: switched || scenario.hasExistingRuntime ? { routeEpoch: 24, executionEpoch: switched ? 3 : 2, step: 1 } : null }) }
+      return { title: 'YARP route document', format: 'JSON', body: json({ ownerId: 'app_shop', state: switched || scenario.hasExistingRuntime ? 'assigned' : 'unassigned', appVersionId: switched ? versionId : scenario.oldVersion, subdomain: 'deployment-explorer-demo.example', vms: switched ? [`https://${candidateFqdn}/`] : scenario.hasExistingRuntime ? ['https://embr-existing.westus3.azurecontainerapps.io/'] : [], backendPrefixes: switched || scenario.hasExistingRuntime ? ['/api/'] : [], staticRouting: switched ? { reference: staticReference } : scenario.hasExistingRuntime ? { reference: 'static-assets/app_shop/ver_previous/web/site' } : null, routeMutationFence: switched || scenario.hasExistingRuntime ? { routeEpoch: 24, executionEpoch: switched ? 3 : 2, step: 1 } : null }) }
     case 'customer':
       if (!scenario.hasExistingRuntime && !switched) return { title: 'Customer URL before first activation', format: 'HTTP', body: 'GET https://deployment-explorer-demo.example/api/health\n\nNo active YARP route is assigned yet.' }
       return { title: 'Customer route response', format: 'HTTP', body: `GET https://deployment-explorer-demo.example/api/health\n\nHTTP/1.1 200 OK\nX-Embr-App-Version: ${switched ? versionId : scenario.oldVersion}` }

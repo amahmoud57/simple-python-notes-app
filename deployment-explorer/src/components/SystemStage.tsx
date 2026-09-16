@@ -1,6 +1,7 @@
 import type { CSSProperties } from 'react'
 import {
   AppWindow,
+  ArrowRight,
   Boxes,
   CircleCheck,
   ClipboardList,
@@ -191,20 +192,37 @@ function NodeButton({
   const completedIds = new Set(scenario.steps.slice(0, completedCount).map((item) => item.id))
   const retainedVersion = scenario.id === 'redeploy' || scenario.id === 'rollback'
   const versionCreated = retainedVersion || completedIds.has('create-version')
-  const versionReady = retainedVersion || completedIds.has('seal-version')
   const deploymentCreated = completedIds.has('create-deployment')
     || [...completedIds].some((item) => item.endsWith('-create-deployment'))
+  const versionBuilding = retainedVersion || completedIds.has('start-version-build')
+  const versionReady = retainedVersion || completedIds.has('finish-version-build')
+  const deploymentComplete = completedCount >= scenario.steps.length
+  const deploymentStatus = deploymentComplete
+    ? { text: 'Succeeded', tone: 'serving' }
+    : cutover === 'draining' || cutover === 'deleting'
+      ? { text: 'Cleaning up', tone: 'draining' }
+      : ['switched', 'verified', 'active'].includes(cutover)
+        ? { text: 'Activating', tone: 'existing' }
+        : versionReady
+          ? { text: 'Provisioning', tone: 'ready' }
+          : versionBuilding
+            ? { text: 'Building', tone: 'building' }
+            : { text: 'Pending', tone: 'pending' }
   const lifecycleStatus = id === 'app'
     ? { text: 'Exists before deploy', tone: 'existing' }
     : id === 'version'
       ? versionReady
         ? { text: 'Ready', tone: 'serving' }
+        : versionBuilding
+          ? { text: 'Building', tone: 'building' }
         : versionCreated
           ? { text: 'Pending', tone: 'ready' }
+          : deploymentCreated
+            ? { text: 'ID reserved', tone: 'reserved' }
           : { text: 'Not created', tone: 'idle' }
       : id === 'deployment'
         ? deploymentCreated
-          ? { text: 'Created', tone: 'existing' }
+          ? deploymentStatus
           : { text: 'Not created', tone: 'idle' }
         : undefined
   const status = id === 'existing'
@@ -270,6 +288,12 @@ export function SystemStage({
   const PayloadIcon = step ? payloadIcon[step.payloadKind] : CloudCog
   const provider = providerState(cutover, scenario)
   const routeLive = scenario.hasExistingRuntime || ['switched', 'verified', 'active'].includes(cutover)
+  const sourceLabel = step
+    ? getNodeLabel(nodes.find((node) => node.id === step.source) ?? nodes[0], scenario)
+    : null
+  const targetLabel = step
+    ? getNodeLabel(nodes.find((node) => node.id === step.target) ?? nodes[0], scenario)
+    : null
   const travelStyle = {
     '--start-x': `${geometry.start.x}px`,
     '--start-y': `${geometry.start.y}px`,
@@ -307,12 +331,20 @@ export function SystemStage({
 
       <div className="transfer-brief" aria-live="polite">
         <div>
-          <span>{isAnimating ? 'Moving now' : 'Moving'}</span>
-          <strong>{step?.payload ?? 'Active Deployment reference'}</strong>
+          <span>{isAnimating ? 'Happening now' : 'What happens now'}</span>
+          <strong>{step?.reason ?? 'All deployment work has completed.'}</strong>
+          {step ? (
+            <p className="transfer-route">
+              <b>{sourceLabel}</b>
+              <ArrowRight size={14} aria-hidden="true" />
+              <b>{targetLabel}</b>
+              <code>{step.payload}</code>
+            </p>
+          ) : null}
         </div>
         <div>
-          <span>After this step</span>
-          <strong>{step?.result ?? 'The previous provider has been removed.'}</strong>
+          <span>State after this step</span>
+          <strong>{step?.result ?? 'Deployment succeeded and cleanup is complete.'}</strong>
         </div>
       </div>
 
