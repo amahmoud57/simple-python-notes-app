@@ -526,16 +526,16 @@ export function SystemStage({
               <PayloadIcon size={16} />
             </div>
           ) : null}
-
-          <div className={`cutover-status state-${cutover}`}>
-            <ActivityIcon />
-            <div>
-              <span>YARP backend</span>
-              <strong>{provider.target}</strong>
-            </div>
-            <p>{provider.note}</p>
-          </div>
         </div>
+      </div>
+
+      <div className={`cutover-status state-${cutover}`}>
+        <ActivityIcon />
+        <div>
+          <span>YARP backend</span>
+          <strong>{provider.target}</strong>
+        </div>
+        <p>{provider.note}</p>
       </div>
     </section>
   )

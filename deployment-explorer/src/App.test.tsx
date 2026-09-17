@@ -28,6 +28,8 @@ describe('Deployment Explorer', () => {
     expect(screen.getByText('202 Accepted + Azure-AsyncOperation URL')).toBeInTheDocument()
     expect(container.querySelector('.destination-note')).not.toBeInTheDocument()
     expect(container.querySelectorAll('.transfer-brief > div')).toHaveLength(2)
+    expect(container.querySelector('.system-stage > .cutover-status')).not.toBeInTheDocument()
+    expect(container.querySelector('.stage-panel > .cutover-status')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Next step' }))
     expect(screen.getByRole('heading', { name: 'Forward the authenticated ARM identity' })).toBeInTheDocument()

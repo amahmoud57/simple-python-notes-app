@@ -1,5 +1,7 @@
 /* Deployment Explorer */
 .app-shell {
+  display: flex;
+  flex-direction: column;
   min-width: 320px;
   height: 100dvh;
   min-height: 100vh;
@@ -9,6 +11,7 @@
 }
 
 .app-header {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -65,6 +68,7 @@
 .command-bar {
   position: relative;
   z-index: 40;
+  flex: 0 0 auto;
   justify-content: space-between;
   gap: 18px;
   min-height: 62px;
@@ -107,8 +111,9 @@
 
 .workspace {
   display: grid;
+  flex: 1 1 auto;
   grid-template-columns: 272px minmax(0, 1fr);
-  height: calc(100dvh - 136px);
+  height: auto;
   min-height: 0;
 }
 
@@ -278,7 +283,7 @@
 .travel-payload.kind-health svg { animation: pulse .75s ease-in-out infinite; }
 .travel-payload.kind-delete { background: var(--red); border-style: dashed; }
 
-.cutover-status { position: absolute; z-index: 8; right: 48px; bottom: 10px; left: 204px; display: grid; grid-template-columns: auto minmax(170px,.7fr) minmax(260px,1.3fr); gap: 11px; align-items: center; min-height: 43px; padding: 7px 10px; color: #f3f8f5; background: rgba(21,32,28,.96); border-left: 4px solid var(--green); box-shadow: 0 8px 22px rgba(23,33,30,.18); }
+.cutover-status { position: relative; z-index: 8; display: grid; flex: 0 0 auto; grid-template-columns: auto minmax(170px,.7fr) minmax(260px,1.3fr); gap: 11px; align-items: center; width: 100%; min-height: 48px; padding: 8px 14px; color: #f3f8f5; background: #15201c; border-top: 1px solid #34423c; border-left: 4px solid var(--green); box-shadow: 0 -5px 16px rgba(23,33,30,.12); }
 .cutover-status.state-draining,
 .cutover-status.state-deleting { border-left-color: var(--orange); }
 .cutover-status.state-empty { border-left-color: #89948f; }
@@ -328,7 +333,7 @@
 }
 
 @media (max-width: 720px) {
-  .app-shell { height: auto; overflow: visible; }
+  .app-shell { display: block; height: auto; overflow: visible; }
   .app-header { align-items: flex-start; padding: 12px 14px; }
   .environment-chip { display: none; }
   .brand h1 { font-size: 20px; }
@@ -349,6 +354,8 @@
   .transfer-route code { flex-basis: 100%; margin-left: 0; padding: 6px 0 0; border-top: 1px solid #b8cdc4; border-left: 0; }
   .starting-state { flex-wrap: wrap; padding-block: 9px; }
   .stage-scroll { flex: none; height: 680px; }
+  .cutover-status { grid-template-columns: auto minmax(140px,1fr); }
+  .cutover-status p { grid-column: 2; }
   .detail-drawer { width: 100vw; }
 }
 
