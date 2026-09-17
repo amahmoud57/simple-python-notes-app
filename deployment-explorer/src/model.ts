@@ -83,7 +83,7 @@ export interface FlowStep {
 }
 
 export interface Scenario {
-  id: 'manual' | 'update' | 'redeploy' | 'rollback'
+  id: 'manual' | 'latest' | 'redeploy' | 'rollback'
   label: string
   title: string
   summary: string
@@ -473,16 +473,16 @@ const manualSteps: FlowStep[] = [
   ...sourceBuildSteps(true, 'adp_demo', 'ver_demo', 'v1', false),
 ]
 
-const updateSteps: FlowStep[] = [
+const latestRevisionSteps: FlowStep[] = [
   step({
     id: 'arm-request',
     phase: 'pending',
-    title: 'Request an update through ARM',
+    title: 'Request deployment of the latest source revision',
     source: 'client',
     target: 'arm',
     payload: 'POST /deploy + request ID',
     payloadKind: 'request',
-    reason: 'The customer explicitly asks Builder Apps to build the latest revision of its configured branch and replace the active version.',
+    reason: 'This is a source deployment, not a configuration change. The customer asks Builder Apps to resolve and build the current head of its configured branch, then replace the active version.',
     result: '202 Accepted + Azure-AsyncOperation URL',
     api: 'POST .../Microsoft.Web/builderApps/shop/deploy?api-version=2026-08-01',
     executionSurface: 'armApi',
@@ -493,7 +493,7 @@ const updateSteps: FlowStep[] = [
     title: 'Forward the authenticated ARM identity',
     source: 'arm',
     target: 'regional',
-    payload: 'Microsoft Entra tenant ID + object ID + request ID update-842',
+    payload: 'Microsoft Entra tenant ID + object ID + request ID deploy-842',
     payloadKind: 'request',
     reason: 'Embr.Arm.Api has finished the public ARM protocol work. Its typed client now calls Regional over a private non-ARM API using the ARM service identity and mTLS.',
     result: 'ARM semantics end; Regional receives AppId, trigger metadata, and trusted Entra identity { tenantId, objectId }',
@@ -509,23 +509,23 @@ const updateSteps: FlowStep[] = [
     payload: 'Builder App ID: app_shop',
     payloadKind: 'resource',
     reason: 'Regional validates the existing Builder App, including its source authorization and active v16 runtime.',
-    result: 'Builder App configuration valid; deployment ID adp_update and AppVersion ID ver_update are reserved',
+    result: 'Builder App configuration valid; deployment ID adp_latest and AppVersion ID ver_latest are reserved',
     api: 'GetByIdAsync -> ValidateAppConfiguration -> runtimeProvider.IsConfigured',
   }),
-  createDeploymentStep('adp_update', 'ver_update'),
+  createDeploymentStep('adp_latest', 'ver_latest'),
   step({
     id: 'reserve-app',
     phase: 'pending',
     title: 'Reserve the Builder App for this operation',
     source: 'deployment',
     target: 'app',
-    payload: 'pendingDeploymentId: adp_update',
+    payload: 'pendingDeploymentId: adp_latest',
     payloadKind: 'resource',
     reason: 'The app pendingDeploymentId slot prevents two manual Deployments from executing concurrently.',
-    result: 'BuilderApp.pendingDeploymentId = adp_update; this operation owns execution',
+    result: 'BuilderApp.pendingDeploymentId = adp_latest; this operation owns execution',
     api: 'ResumeAsync -> AdmitAsync -> TryAdmitDeploymentAsync',
   }),
-  ...sourceBuildSteps(true, 'adp_update', 'ver_update', 'v17', true),
+  ...sourceBuildSteps(true, 'adp_latest', 'ver_latest', 'v17', true),
 ]
 
 const retainedSteps = (action: 'redeploy' | 'rollback'): FlowStep[] => {
@@ -707,15 +707,15 @@ export const scenarios: Scenario[] = [
     steps: manualSteps,
   },
   {
-    id: 'update',
-    label: 'Manual update',
-    title: 'Build v17 and replace v16',
-    summary: 'The ARM deploy action resolves the configured branch, builds a new AppVersion, and keeps v16 live until v17 passes health and YARP switches.',
+    id: 'latest',
+    label: 'Deploy latest',
+    title: 'Build the latest source revision and replace v16',
+    summary: 'This is not a configuration update. The ARM deploy action resolves the current configured branch head, builds a new AppVersion, and keeps v16 live until v17 passes health and YARP switches.',
     hasExistingRuntime: true,
     oldVersion: 'v16',
     newVersion: 'v17',
-    appVersionId: 'ver_update',
-    steps: updateSteps,
+    appVersionId: 'ver_latest',
+    steps: latestRevisionSteps,
   },
   {
     id: 'redeploy',
@@ -798,8 +798,8 @@ export function getNodeExample(
   const completedIds = new Set(scenario.steps.slice(0, completedCount).map((item) => item.id))
   const deploymentId = scenario.id === 'manual'
     ? 'adp_demo'
-    : scenario.id === 'update'
-      ? 'adp_update'
+    : scenario.id === 'latest'
+      ? 'adp_latest'
       : `adp_${scenario.id}`
   const versionId = scenario.appVersionId
   const versionCreated = scenario.id === 'redeploy' || scenario.id === 'rollback' || completedIds.has('create-version')
@@ -844,7 +844,7 @@ export function getNodeExample(
       return {
         title: 'ARM action response',
         format: 'HTTP',
-        body: `POST .../Microsoft.Web/builderApps/deployment-explorer-demo/${scenario.id === 'manual' || scenario.id === 'update' ? 'deploy' : scenario.id}\n\n202 Accepted\nAzure-AsyncOperation: .../operationStatuses/${deploymentId}\nRetry-After: 5`,
+        body: `POST .../Microsoft.Web/builderApps/deployment-explorer-demo/${scenario.id === 'manual' || scenario.id === 'latest' ? 'deploy' : scenario.id}\n\n202 Accepted\nAzure-AsyncOperation: .../operationStatuses/${deploymentId}\nRetry-After: 5`,
       }
     case 'regional':
       return {
@@ -865,7 +865,7 @@ export function getNodeExample(
       }
     case 'deployment':
       if (!deploymentCreated) return { title: 'Deployment before creation', format: 'JSON', body: json({ id: deploymentId, state: 'not created yet', waitingFor: 'validated Builder App configuration and trigger metadata' }) }
-      return { title: 'BuilderAppDeployment operation document', format: 'JSON', body: json({ id: deploymentId, appId: 'app_shop', appVersionId: versionId, status: deploymentStatus, action: scenario.id === 'manual' || scenario.id === 'update' ? 'deploy' : scenario.id, candidateFqdn: candidateCreated ? candidateFqdn : undefined, publicUrl: switched ? demoCustomerUrl : undefined, previousDeploymentId: scenario.hasExistingRuntime ? 'adp_previous' : undefined, completedAt: completedCount === scenario.steps.length ? '2026-09-16T18:42:31Z' : undefined }) }
+      return { title: 'BuilderAppDeployment operation document', format: 'JSON', body: json({ id: deploymentId, appId: 'app_shop', appVersionId: versionId, status: deploymentStatus, action: scenario.id === 'manual' || scenario.id === 'latest' ? 'deploy' : scenario.id, candidateFqdn: candidateCreated ? candidateFqdn : undefined, publicUrl: switched ? demoCustomerUrl : undefined, previousDeploymentId: scenario.hasExistingRuntime ? 'adp_previous' : undefined, completedAt: completedCount === scenario.steps.length ? '2026-09-16T18:42:31Z' : undefined }) }
     case 'app':
       return { title: 'Pre-existing Microsoft.Web/builderApps resource', format: 'JSON', body: json({ name: 'deployment-explorer-demo', type: 'Microsoft.Web/builderApps', properties: { lifecycleId: 'alc_31', sourceIntegrationState: 'Configured', pendingDeploymentId: appReserved && !promoted ? deploymentId : null, runtime: promoted ? { activeDeploymentId: deploymentId, activeAppVersionId: versionId, url: demoCustomerUrl } : scenario.hasExistingRuntime ? { activeDeploymentId: 'adp_previous', activeAppVersionId: scenario.oldVersion, url: demoCustomerUrl } : null } }) }
     case 'github':

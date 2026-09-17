@@ -105,12 +105,12 @@ describe('Deployment Explorer', () => {
     fireEvent.click(next)
     expect(screen.getByRole('button', { name: 'Inspect Customer URL' })).toHaveTextContent('Public route verified')
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Manual update' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Deploy latest' }))
     expect(container.querySelector('.traffic-routing')).toHaveAttribute('data-route-target', 'existing')
     expect(container.querySelectorAll('.yarp-backend-route')).toHaveLength(1)
 
-    const updateScenario = getScenario('update')
-    const activationIndex = updateScenario.steps.findIndex((step) => step.id === 'activate-route')
+    const latestScenario = getScenario('latest')
+    const activationIndex = latestScenario.steps.findIndex((step) => step.id === 'activate-route')
     for (let index = 0; index < activationIndex; index += 1) fireEvent.click(next)
     expect(container.querySelector('.candidate-health-gate')).toHaveAttribute('data-health-state', 'passed')
     expect(container.querySelector('.traffic-routing')).toHaveAttribute('data-route-target', 'existing')

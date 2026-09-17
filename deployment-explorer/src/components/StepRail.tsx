@@ -10,7 +10,7 @@ interface StepRailProps {
 
 const scenarioIcons = {
   manual: Rocket,
-  update: GitBranch,
+  latest: GitBranch,
   redeploy: RefreshCw,
   rollback: History,
 }

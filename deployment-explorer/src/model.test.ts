@@ -71,7 +71,7 @@ describe('deployment model', () => {
   })
 
   it('tracks the old provider through candidate, switch, drain, and deletion', () => {
-    const scenario = getScenario('update')
+    const scenario = getScenario('latest')
     const countAfter = (id: string) => scenario.steps.findIndex((step) => step.id === id) + 1
 
     expect(getCutoverState(scenario, 0)).toBe('existing')
@@ -87,11 +87,14 @@ describe('deployment model', () => {
     expect(scenarios.map((scenario) => scenario.id)).not.toContain('push')
     expect(scenarios.map((scenario) => scenario.label)).not.toContain('GitHub push')
 
-    const update = getScenario('update')
-    expect(update.label).toBe('Manual update')
-    expect(update.steps[0].id).toBe('arm-request')
-    expect(update.steps[0].executionSurface).toBe('armApi')
-    expect(update.steps.some((step) => step.id === 'resolve-revision')).toBe(true)
+    const latest = getScenario('latest')
+    expect(latest.label).toBe('Deploy latest')
+    expect(latest.summary).toContain('not a configuration update')
+    expect(latest.steps[0].id).toBe('arm-request')
+    expect(latest.steps[0].title).toBe('Request deployment of the latest source revision')
+    expect(latest.steps[0].reason).toContain('not a configuration change')
+    expect(latest.steps[0].executionSurface).toBe('armApi')
+    expect(latest.steps.some((step) => step.id === 'resolve-revision')).toBe(true)
   })
 
   it('models health as a gate on the candidate rather than a standalone entity', () => {
