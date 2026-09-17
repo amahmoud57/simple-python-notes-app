@@ -93,6 +93,14 @@ function App() {
     setCompletedCount((current) => Math.max(current - 1, 0))
   }
 
+  const selectStep = (index: number) => {
+    setIsPlaying(false)
+    setIsAnimating(false)
+    setTravelStarted(false)
+    setSelectedNode(null)
+    setCompletedCount(Math.max(0, Math.min(index, scenario.steps.length - 1)))
+  }
+
   const run = () => {
     if (complete) return
     setIsPlaying(true)
@@ -167,6 +175,7 @@ function App() {
           scenario={scenario}
           completedCount={completedCount}
           onScenarioChange={selectScenario}
+          onStepSelect={selectStep}
         />
         <SystemStage
           scenario={scenario}

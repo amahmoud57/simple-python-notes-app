@@ -6,6 +6,7 @@ interface StepRailProps {
   scenario: Scenario
   completedCount: number
   onScenarioChange: (scenario: Scenario) => void
+  onStepSelect: (index: number) => void
 }
 
 const scenarioIcons = {
@@ -15,7 +16,7 @@ const scenarioIcons = {
   rollback: History,
 }
 
-export function StepRail({ scenarios, scenario, completedCount, onScenarioChange }: StepRailProps) {
+export function StepRail({ scenarios, scenario, completedCount, onScenarioChange, onStepSelect }: StepRailProps) {
   return (
     <aside className="step-rail" aria-label="Deployment scenarios and steps">
       <div className="scenario-list" role="tablist" aria-label="Deployment scenario">
@@ -47,13 +48,21 @@ export function StepRail({ scenarios, scenario, completedCount, onScenarioChange
           const current = index === completedCount
           return (
             <li key={item.id} className={complete ? 'is-complete' : current ? 'is-current' : ''}>
-              <span className="step-marker" aria-hidden="true">
-                {complete ? <Check size={12} strokeWidth={3} /> : <Circle size={9} fill={current ? 'currentColor' : 'none'} />}
-              </span>
-              <div>
-                <span>{phaseLabels[item.phase]}</span>
-                <strong>{item.title}</strong>
-              </div>
+              <button
+                type="button"
+                className="step-jump"
+                aria-current={current ? 'step' : undefined}
+                aria-label={`Go to step ${index + 1}: ${item.title}`}
+                onClick={() => onStepSelect(index)}
+              >
+                <span className="step-marker" aria-hidden="true">
+                  {complete ? <Check size={12} strokeWidth={3} /> : <Circle size={9} fill={current ? 'currentColor' : 'none'} />}
+                </span>
+                <span className="step-copy">
+                  <span>{phaseLabels[item.phase]}</span>
+                  <strong>{item.title}</strong>
+                </span>
+              </button>
             </li>
           )
         })}

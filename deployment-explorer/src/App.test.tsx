@@ -73,6 +73,27 @@ describe('Deployment Explorer', () => {
     expect(previous).toBeDisabled()
   })
 
+  it('jumps directly to any deployment sequence step', () => {
+    const { container } = render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run flow' }))
+    expect(container.querySelector('.run-status')).toHaveTextContent('Reading pause')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Go to step 18: Generate the app URL and create its YARP route' }))
+    expect(container.querySelector('.run-status')).toHaveTextContent('Ready')
+    expect(screen.getByRole('heading', { name: 'Generate the app URL and create its YARP route' })).toBeInTheDocument()
+    expect(screen.getByLabelText('17 of 20 steps complete')).toBeInTheDocument()
+    expect(container.querySelector('.candidate-health-gate')).toHaveAttribute('data-health-state', 'passed')
+    expect(container.querySelector('.traffic-routing')).toHaveAttribute('data-route-target', 'none')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Go to step 6: Resolve the configured branch to one commit' }))
+    expect(screen.getByRole('heading', { name: 'Resolve the configured branch to one commit' })).toBeInTheDocument()
+    expect(screen.getByLabelText('5 of 20 steps complete')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Inspect AppVersion' })).toHaveTextContent('ID reserved')
+    expect(container.querySelector('.candidate-health-gate')).toHaveAttribute('data-health-state', 'absent')
+    expect(container.querySelector('.traffic-routing')).toHaveAttribute('data-route-target', 'none')
+  })
+
   it('switches to a retained-version flow without GitHub build steps', () => {
     render(<App />)
 

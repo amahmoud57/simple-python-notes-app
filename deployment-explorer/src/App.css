@@ -133,14 +133,17 @@
 .rail-heading span { color: var(--muted); font: 900 8px/1 var(--mono); text-transform: uppercase; }
 .rail-heading strong { color: var(--ink-soft); font: 800 9px/1 var(--mono); }
 .step-list { margin: 0; padding: 0 10px 20px; overflow-y: auto; list-style: none; scrollbar-color: #b4bbb6 transparent; }
-.step-list li { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 7px; min-height: 54px; padding: 8px 6px; color: #87908c; border-left: 2px solid transparent; }
-.step-list li.is-current { color: var(--ink); background: #fffdf8; border-left-color: var(--orange); }
+.step-list li { min-height: 54px; color: #87908c; }
+.step-jump { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 7px; width: 100%; min-height: 54px; padding: 8px 6px; color: inherit; text-align: left; cursor: pointer; background: transparent; border: 0; border-left: 2px solid transparent; border-radius: 0; }
+.step-jump:hover { color: var(--ink); background: rgba(255,253,248,.72); }
+.step-jump:focus-visible { position: relative; z-index: 1; outline: 2px solid var(--cyan); outline-offset: -2px; }
+.step-list li.is-current .step-jump { color: var(--ink); background: #fffdf8; border-left-color: var(--orange); }
 .step-list li.is-complete { color: #587269; }
 .step-marker { display: grid; place-items: center; width: 19px; height: 19px; margin-top: 1px; color: #929b96; border: 1px solid #b7bdb9; border-radius: 50%; background: #f7f5ef; }
 .is-current .step-marker { color: #fff; background: var(--orange); border-color: var(--orange); box-shadow: 0 0 0 4px rgba(201, 93, 27, 0.12); }
 .is-complete .step-marker { color: #fff; background: var(--green); border-color: var(--green); }
-.step-list li div span { display: block; margin-bottom: 5px; font: 800 7px/1 var(--mono); text-transform: uppercase; }
-.step-list li div strong { display: block; font-size: 10px; line-height: 1.25; }
+.step-copy > span { display: block; margin-bottom: 5px; font: 800 7px/1 var(--mono); text-transform: uppercase; }
+.step-copy strong { display: block; font-size: 10px; line-height: 1.25; }
 
 .stage-panel { display: flex; flex-direction: column; min-width: 0; overflow: hidden; background: #dbded8; }
 .active-step {
