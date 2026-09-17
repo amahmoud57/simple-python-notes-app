@@ -1,7 +1,9 @@
 /* Deployment Explorer */
 .app-shell {
   min-width: 320px;
+  height: 100dvh;
   min-height: 100vh;
+  overflow: hidden;
   color: var(--ink);
   background: var(--canvas);
 }
@@ -106,8 +108,8 @@
 .workspace {
   display: grid;
   grid-template-columns: 272px minmax(0, 1fr);
-  height: calc(100vh - 136px);
-  min-height: 700px;
+  height: calc(100dvh - 136px);
+  min-height: 0;
 }
 
 .step-rail {
@@ -185,16 +187,16 @@
 .transfer-route code { min-width: 0; margin-left: 5px; padding-left: 9px; overflow-wrap: anywhere; color: var(--violet); background: transparent; border-left: 1px solid #b8cdc4; font: 800 8px/1.25 var(--mono); }
 
 .stage-scroll { flex: 1; min-height: 0; overflow: auto; scrollbar-color: #9da6a1 transparent; }
-.system-stage { position: relative; width: 1080px; min-height: 680px; overflow: hidden; isolation: isolate; background-color: #f8f6ef; background-image: radial-gradient(circle at 48% 38%, rgba(255,255,255,.92), transparent 34%), linear-gradient(rgba(23,33,30,.04) 1px, transparent 1px), linear-gradient(90deg, rgba(23,33,30,.04) 1px, transparent 1px); background-size: auto, 20px 20px, 20px 20px; }
+.system-stage { position: relative; width: 100%; min-width: 1080px; min-height: 680px; overflow: hidden; isolation: isolate; background-color: #f8f6ef; background-image: radial-gradient(circle at 48% 38%, rgba(255,255,255,.92), transparent 34%), linear-gradient(rgba(23,33,30,.04) 1px, transparent 1px), linear-gradient(90deg, rgba(23,33,30,.04) 1px, transparent 1px); background-size: auto, 20px 20px, 20px 20px; }
 .stage-zone { position: absolute; z-index: 0; pointer-events: none; border-top: 2px solid var(--zone); opacity: .68; }
 .stage-zone span { position: absolute; top: 8px; left: 9px; color: var(--zone); font: 900 8px/1 var(--mono); text-transform: uppercase; }
-.stage-zone.zone-control { --zone: var(--cyan); inset: 14px 30px auto 20px; height: 126px; background: linear-gradient(rgba(215,242,247,.6), transparent); }
-.stage-zone.zone-source { --zone: var(--violet); top: 170px; left: 18px; width: 340px; height: 265px; background: linear-gradient(145deg, rgba(238,231,247,.75), transparent); }
-.stage-zone.zone-build { --zone: var(--orange); top: 160px; left: 350px; width: 350px; height: 315px; background: radial-gradient(circle, rgba(250,230,213,.8), transparent 73%); }
-.stage-zone.zone-runtime { --zone: var(--yellow); top: 160px; right: 18px; width: 370px; height: 465px; background: linear-gradient(220deg, rgba(255,240,184,.72), transparent 72%); }
-.stage-zone.zone-traffic { --zone: var(--green); bottom: 18px; left: 18px; width: 610px; height: 180px; background: linear-gradient(0deg, rgba(217,244,231,.8), transparent); }
+.stage-zone.zone-control { --zone: var(--cyan); inset: 14px 2.78% auto 1.85%; height: 126px; background: linear-gradient(rgba(215,242,247,.6), transparent); }
+.stage-zone.zone-source { --zone: var(--violet); top: 170px; left: 1.67%; width: 31.48%; height: 265px; background: linear-gradient(145deg, rgba(238,231,247,.75), transparent); }
+.stage-zone.zone-build { --zone: var(--orange); top: 160px; left: 32.41%; width: 32.41%; height: 315px; background: radial-gradient(circle, rgba(250,230,213,.8), transparent 73%); }
+.stage-zone.zone-runtime { --zone: var(--yellow); top: 160px; right: 1.67%; width: 34.26%; height: 465px; background: linear-gradient(220deg, rgba(255,240,184,.72), transparent 72%); }
+.stage-zone.zone-traffic { --zone: var(--green); bottom: 18px; left: 1.67%; width: 56.48%; height: 180px; background: linear-gradient(0deg, rgba(217,244,231,.8), transparent); }
 
-.stage-lines { position: absolute; z-index: 2; inset: 0; width: 1080px; height: 680px; pointer-events: none; }
+.stage-lines { position: absolute; z-index: 2; inset: 0; width: 100%; min-width: 1080px; height: 680px; pointer-events: none; }
 .stage-lines marker path { fill: var(--cyan); }
 .stage-lines #green-arrow path { fill: var(--green); }
 .stage-lines #idle-arrow path { fill: #8e9994; }
@@ -256,7 +258,7 @@
 .shape-manifest .node-machine::after { top: -1px; right: -1px; bottom: auto; left: auto; width: 19px; height: 19px; opacity: 1; background: linear-gradient(225deg, var(--violet-soft) 49%, var(--violet) 50% 55%, #fffdf8 56%); }
 .shape-version .node-machine { height: 68px; color: #a1efca; background: #313b37; border-color: #17211e; border-radius: 3px 3px 13px 13px; box-shadow: inset 0 -9px rgba(0,0,0,.18), 0 9px 0 rgba(23,33,30,.08), 0 14px 24px rgba(23,33,30,.15); }
 .shape-blob .node-machine { height: 66px; border-radius: 50% / 18%; background: linear-gradient(90deg, #d7f2f7, #fff, #b9e3ec); }
-.candidate-health-gate { position: absolute; z-index: 8; top: 490px; right: 50px; display: grid; grid-template-columns: 28px minmax(0,1fr); gap: 7px; align-items: center; width: 164px; min-height: 54px; padding: 7px 8px; color: var(--ink-soft); background: rgba(255,253,248,.95); border-left: 4px solid #929d98; box-shadow: 0 7px 16px rgba(23,33,30,.12); }
+.candidate-health-gate { position: absolute; z-index: 8; top: 490px; display: grid; grid-template-columns: 28px minmax(0,1fr); gap: 7px; align-items: center; width: 164px; min-height: 54px; padding: 7px 8px; color: var(--ink-soft); background: rgba(255,253,248,.95); border-left: 4px solid #929d98; box-shadow: 0 7px 16px rgba(23,33,30,.12); }
 .candidate-health-gate::before { content: ''; position: absolute; top: -14px; left: 78px; width: 1px; height: 14px; background: #929d98; }
 .health-gate-icon { display: grid; place-items: center; width: 27px; height: 27px; color: #69746f; border: 1px solid #aab3ae; border-radius: 50%; }
 .candidate-health-gate span:not(.health-gate-icon) { display: block; color: var(--muted); font: 900 7px/1 var(--mono); text-transform: uppercase; }
@@ -326,6 +328,7 @@
 }
 
 @media (max-width: 720px) {
+  .app-shell { height: auto; overflow: visible; }
   .app-header { align-items: flex-start; padding: 12px 14px; }
   .environment-chip { display: none; }
   .brand h1 { font-size: 20px; }

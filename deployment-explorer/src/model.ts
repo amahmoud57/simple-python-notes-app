@@ -129,7 +129,7 @@ export const nodes: SystemNode[] = [
   { id: 'github', label: 'GitHub', eyebrow: 'Source provider', x: 48, y: 226, group: 'source' },
   { id: 'manifest', label: 'builder.yaml', eyebrow: 'Component manifest', x: 230, y: 205, group: 'source' },
   { id: 'build', label: 'ADC build sandbox', eyebrow: 'Ephemeral build', x: 382, y: 248, group: 'build' },
-  { id: 'blob', label: 'Blob Storage', eyebrow: 'Static output', x: 390, y: 390, group: 'build' },
+  { id: 'blob', label: 'Blob Storage', eyebrow: 'Static output', x: 390, y: 350, group: 'build' },
   { id: 'acr', label: 'Azure Container Registry', eyebrow: 'Compute output', x: 555, y: 260, group: 'build' },
   { id: 'artifact', label: 'ADC Artifact', eyebrow: 'Runtime image import', x: 810, y: 238, group: 'runtime' },
   { id: 'candidate', label: 'Artifact App candidate', eyebrow: 'New provider', x: 880, y: 380, group: 'runtime' },

@@ -113,6 +113,14 @@ describe('deployment model', () => {
     expect(getNodeExample('candidate', scenario, 0, 'healthy').body).toContain('"successfulResponses": 2')
   })
 
+  it('keeps Blob Storage and its label above the customer traffic divider', () => {
+    const blob = nodes.find((node) => node.id === 'blob')
+    const trafficDividerY = 680 - 18 - 180
+
+    expect(blob).toBeDefined()
+    expect((blob?.y ?? 0) + 110).toBeLessThan(trafficDividerY)
+  })
+
   it('models first deploy from an empty runtime without predecessor cleanup', () => {
     const scenario = getScenario('manual')
     const countAfter = (id: string) => scenario.steps.findIndex((step) => step.id === id) + 1

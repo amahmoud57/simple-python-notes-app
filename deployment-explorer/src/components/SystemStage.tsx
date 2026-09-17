@@ -1,4 +1,4 @@
-import type { CSSProperties } from 'react'
+import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
 import {
   AppWindow,
   ArrowRight,
@@ -78,9 +78,15 @@ const payloadIcon: Record<PayloadKind, LucideIcon> = {
   delete: Boxes,
 }
 
-const point = (id: NodeId) => {
+const baseStageWidth = 1080
+const stageHeight = 680
+
+const point = (id: NodeId, stageWidth = baseStageWidth) => {
   const node = nodes.find((item) => item.id === id) ?? nodes[0]
-  return { x: node.x + 68, y: node.y + 34 }
+  return {
+    x: (node.x + 68) * (stageWidth / baseStageWidth),
+    y: node.y + 34,
+  }
 }
 
 const machineSize: Partial<Record<NodeId, { width: number; height: number }>> = {
@@ -99,8 +105,8 @@ function getRouteTarget(cutover: CutoverState, scenario: Scenario): RouteTarget 
   return scenario.hasExistingRuntime ? 'existing' : 'none'
 }
 
-function edgePoint(id: NodeId, toward: { x: number; y: number }) {
-  const center = point(id)
+function edgePoint(id: NodeId, toward: { x: number; y: number }, stageWidth: number) {
+  const center = point(id, stageWidth)
   const size = machineSize[id] ?? { width: 136, height: 58 }
   const deltaX = toward.x - center.x
   const deltaY = toward.y - center.y
@@ -120,11 +126,11 @@ function edgePoint(id: NodeId, toward: { x: number; y: number }) {
   }
 }
 
-function transferGeometry(source: NodeId, target: NodeId) {
-  const sourceCenter = point(source)
-  const targetCenter = point(target)
-  const start = edgePoint(source, targetCenter)
-  const end = edgePoint(target, sourceCenter)
+function transferGeometry(source: NodeId, target: NodeId, stageWidth: number) {
+  const sourceCenter = point(source, stageWidth)
+  const targetCenter = point(target, stageWidth)
+  const start = edgePoint(source, targetCenter, stageWidth)
+  const end = edgePoint(target, sourceCenter, stageWidth)
   const bend = Math.max(58, Math.abs(end.x - start.x) * 0.42)
   const direction = end.x >= start.x ? 1 : -1
   return {
@@ -179,6 +185,7 @@ function NodeButton({
   scenario,
   step,
   completedCount,
+  stageWidth,
   selected,
   cutover,
   onSelect,
@@ -187,11 +194,13 @@ function NodeButton({
   scenario: Scenario
   step: FlowStep | undefined
   completedCount: number
+  stageWidth: number
   selected: boolean
   cutover: CutoverState
   onSelect: (id: NodeId) => void
 }) {
   const node = nodes.find((item) => item.id === id) ?? nodes[0]
+  const center = point(id, stageWidth)
   const Icon = id === 'existing' && !scenario.hasExistingRuntime ? ServerOff : iconByNode[id]
   const eyebrow = id === 'existing' && !scenario.hasExistingRuntime ? 'Runtime starts empty' : node.eyebrow
   const active = step?.source === id || step?.target === id
@@ -268,7 +277,7 @@ function NodeButton({
     <button
       type="button"
       className={classes}
-      style={{ left: node.x, top: node.y }}
+      style={{ left: center.x - 68, top: node.y }}
       aria-label={`Inspect ${getNodeLabel(node, scenario)}`}
       aria-pressed={selected}
       onClick={() => onSelect(id)}
@@ -297,16 +306,40 @@ export function SystemStage({
   selectedNode,
   onSelectNode,
 }: SystemStageProps) {
+  const stageRef = useRef<HTMLDivElement>(null)
+  const [stageWidth, setStageWidth] = useState(baseStageWidth)
+
+  useLayoutEffect(() => {
+    const stage = stageRef.current
+    if (!stage) return
+
+    const updateWidth = () => {
+      const width = Math.max(baseStageWidth, stage.getBoundingClientRect().width)
+      setStageWidth((current) => Math.abs(current - width) < 0.5 ? current : width)
+    }
+
+    updateWidth()
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', updateWidth)
+      return () => window.removeEventListener('resize', updateWidth)
+    }
+
+    const observer = new ResizeObserver(updateWidth)
+    observer.observe(stage)
+    return () => observer.disconnect()
+  }, [])
+
   const geometry = step
-    ? transferGeometry(step.source, step.target)
-    : transferGeometry('client', 'arm')
+    ? transferGeometry(step.source, step.target, stageWidth)
+    : transferGeometry('client', 'arm', stageWidth)
   const PayloadIcon = step ? payloadIcon[step.payloadKind] : CloudCog
   const provider = providerState(cutover, scenario)
   const routeTarget = getRouteTarget(cutover, scenario)
   const routeLive = routeTarget !== 'none'
-  const customerRoute = transferGeometry('customer', 'route')
-  const backendRoute = routeTarget === 'none' ? null : transferGeometry('route', routeTarget)
-  const routePoint = point('route')
+  const customerRoute = transferGeometry('customer', 'route', stageWidth)
+  const backendRoute = routeTarget === 'none' ? null : transferGeometry('route', routeTarget, stageWidth)
+  const routePoint = point('route', stageWidth)
+  const candidatePoint = point('candidate', stageWidth)
   const candidateExists = ['candidate', 'healthy', 'switched', 'verified', 'active', 'draining', 'deleting', 'deleted'].includes(cutover)
   const candidateHealthy = ['healthy', 'switched', 'verified', 'active', 'draining', 'deleting', 'deleted'].includes(cutover)
   const healthStepActive = step?.id === 'direct-health' || step?.id.endsWith('-health')
@@ -398,14 +431,14 @@ export function SystemStage({
       </div>
 
       <div className="stage-scroll">
-        <div className={`system-stage ${scenario.hasExistingRuntime ? '' : 'is-first-deploy'} ${cutover === 'active' ? 'is-first-live' : ''}`}>
+        <div ref={stageRef} className={`system-stage ${scenario.hasExistingRuntime ? '' : 'is-first-deploy'} ${cutover === 'active' ? 'is-first-live' : ''}`}>
           <div className="stage-zone zone-control"><span>Control plane</span></div>
           <div className="stage-zone zone-source"><span>GitHub source</span></div>
           <div className="stage-zone zone-build"><span>Build and outputs</span></div>
           <div className="stage-zone zone-runtime"><span>Artifact Apps runtime</span></div>
           <div className="stage-zone zone-traffic"><span>Customer traffic</span></div>
 
-          <svg className="stage-lines" viewBox="0 0 1080 680" aria-hidden="true">
+          <svg className="stage-lines" viewBox={`0 0 ${stageWidth} ${stageHeight}`} aria-hidden="true">
             <defs>
               <marker id="flow-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
                 <path d="M0 0 L8 4 L0 8 Z" />
@@ -464,13 +497,19 @@ export function SystemStage({
               scenario={scenario}
               step={step}
               completedCount={stepIndex}
+              stageWidth={stageWidth}
               selected={selectedNode === node.id}
               cutover={cutover}
               onSelect={onSelectNode}
             />
           ))}
 
-          <div className={`candidate-health-gate state-${healthState}`} data-health-state={healthState} aria-live="polite">
+          <div
+            className={`candidate-health-gate state-${healthState}`}
+            style={{ left: candidatePoint.x - 82 }}
+            data-health-state={healthState}
+            aria-live="polite"
+          >
             <span className="health-gate-icon" aria-hidden="true"><HeartPulse size={17} /></span>
             <div>
               <span>Direct health gate</span>
