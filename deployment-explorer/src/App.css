@@ -162,7 +162,7 @@
 .active-step.phase-provisioning { --phase: #dfa512; }
 .active-step.phase-healthChecking { --phase: var(--green); }
 .active-step.phase-activating { --phase: #23b5d2; }
-.active-step.phase-cleaningUp { --phase: var(--violet); }
+.active-step.phase-postCleanup { --phase: var(--violet); }
 .active-step.phase-succeeded { --phase: #2ad895; }
 .step-number { display: grid; place-items: center; min-height: 56px; color: #fff; background: var(--phase); font: 900 16px/1 var(--mono); }
 .step-number span { display: block; margin-left: 3px; font-size: 9px; opacity: 0.72; }
@@ -240,8 +240,7 @@
 .provider-status.tone-reserved { color: var(--ink-soft); background: #e1e5e2; border: 1px dashed #78817d; }
 .provider-status.tone-building { background: var(--orange); }
 .provider-status.tone-pending { color: var(--ink); background: #f1bb2f; }
-.provider-status.tone-ready,
-.provider-status.tone-draining { color: var(--ink); background: #f1bb2f; }
+.provider-status.tone-ready { color: var(--ink); background: #f1bb2f; }
 .provider-status.tone-deleting,
 .provider-status.tone-deleted { background: var(--red); }
 .system-node.is-dimmed { opacity: .3; filter: saturate(.55); transform: scale(.98); }
@@ -266,12 +265,20 @@
 .shape-manifest .node-machine::after { top: -1px; right: -1px; bottom: auto; left: auto; width: 19px; height: 19px; opacity: 1; background: linear-gradient(225deg, var(--violet-soft) 49%, var(--violet) 50% 55%, #fffdf8 56%); }
 .shape-version .node-machine { height: 68px; color: #a1efca; background: #313b37; border-color: #17211e; border-radius: 3px 3px 13px 13px; box-shadow: inset 0 -9px rgba(0,0,0,.18), 0 9px 0 rgba(23,33,30,.08), 0 14px 24px rgba(23,33,30,.15); }
 .shape-blob .node-machine { height: 66px; border-radius: 50% / 18%; background: linear-gradient(90deg, #d7f2f7, #fff, #b9e3ec); }
-.candidate-health-gate { position: absolute; z-index: 8; top: 490px; display: grid; grid-template-columns: 28px minmax(0,1fr); gap: 7px; align-items: center; width: 164px; min-height: 54px; padding: 7px 8px; color: var(--ink-soft); background: rgba(255,253,248,.95); border-left: 4px solid #929d98; box-shadow: 0 7px 16px rgba(23,33,30,.12); }
-.candidate-health-gate::before { content: ''; position: absolute; top: -14px; left: 78px; width: 1px; height: 14px; background: #929d98; }
+.candidate-health-gate { position: absolute; z-index: 8; top: 493px; display: grid; grid-template-columns: 28px minmax(0,1fr); gap: 8px; align-items: center; width: 192px; min-height: 72px; padding: 7px 8px; color: var(--ink-soft); background: rgba(255,253,248,.97); border-left: 4px solid #929d98; box-shadow: 0 7px 16px rgba(23,33,30,.12); }
+.candidate-health-gate::before { content: ''; position: absolute; top: -14px; left: 92px; width: 1px; height: 14px; background: #929d98; }
 .health-gate-icon { display: grid; place-items: center; width: 27px; height: 27px; color: #69746f; border: 1px solid #aab3ae; border-radius: 50%; }
-.candidate-health-gate span:not(.health-gate-icon) { display: block; color: var(--muted); font: 900 7px/1 var(--mono); text-transform: uppercase; }
-.candidate-health-gate strong { display: block; margin-top: 5px; font: 800 8px/1.2 var(--mono); }
+.health-gate-checks { min-width: 0; }
+.health-gate-check + .health-gate-check { margin-top: 7px; padding-top: 7px; border-top: 1px solid var(--line); }
+.health-gate-check span { display: block; color: var(--muted); font: 900 7px/1 var(--mono); text-transform: uppercase; }
+.health-gate-check strong { display: block; margin-top: 4px; font: 800 7px/1.2 var(--mono); }
+.health-gate-check.state-passed strong { color: #075a3e; }
+.health-gate-check.state-checking strong,
+.health-gate-check.state-probing strong { color: var(--cyan); }
+.health-gate-check.state-blocked strong { color: #7a6250; }
 .candidate-health-gate.state-absent { opacity: .45; }
+.candidate-health-gate.state-blocked,
+.candidate-health-gate.state-waiting,
 .candidate-health-gate.state-next { border-left-color: var(--yellow); }
 .candidate-health-gate.state-probing { border-left-color: var(--cyan); }
 .candidate-health-gate.state-probing .health-gate-icon { color: var(--cyan); border-color: var(--cyan); animation: pulse .8s ease-in-out infinite; }
@@ -287,14 +294,14 @@
 .travel-payload.kind-delete { background: var(--red); border-style: dashed; }
 
 .cutover-status { position: relative; z-index: 8; display: grid; flex: 0 0 auto; grid-template-columns: auto minmax(170px,.7fr) minmax(260px,1.3fr); gap: 11px; align-items: center; width: 100%; min-height: 48px; padding: 8px 14px; color: #f3f8f5; background: #15201c; border-top: 1px solid #34423c; border-left: 4px solid var(--green); box-shadow: 0 -5px 16px rgba(23,33,30,.12); }
-.cutover-status.state-draining,
+.cutover-status.state-cleanupPending,
 .cutover-status.state-deleting { border-left-color: var(--orange); }
 .cutover-status.state-empty { border-left-color: #89948f; }
 .cutover-status span { display: block; color: #91a19a; font: 900 7px/1 var(--mono); text-transform: uppercase; }
 .cutover-status strong { display: block; margin-top: 3px; font: 900 10px/1.1 var(--mono); }
 .cutover-status p { margin: 0; color: #d1dbd6; font-size: 9px; }
 .cutover-dot { width: 9px; height: 9px; border-radius: 50%; background: #2ad895; box-shadow: 0 0 0 5px rgba(42,216,149,.13); }
-.state-draining .cutover-dot,
+.state-cleanupPending .cutover-dot,
 .state-deleting .cutover-dot { background: #f1bb2f; box-shadow: 0 0 0 5px rgba(241,187,47,.13); animation: pulse .8s ease-in-out infinite; }
 .state-empty .cutover-dot { background: transparent; border: 2px solid #a8b2ad; box-shadow: none; }
 
@@ -345,7 +352,7 @@
   .playback-controls { overflow-x: auto; }
   .workspace { display: block; height: auto; min-height: 0; }
   .step-rail { height: auto; max-height: 260px; border-right: 0; border-bottom: 1px solid var(--line-strong); }
-  .scenario-list { grid-template-columns: repeat(4, minmax(112px, 1fr)); overflow-x: auto; }
+  .scenario-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .step-list { max-height: 150px; }
   .stage-panel { min-height: 850px; }
   .active-step { grid-template-columns: 58px minmax(0,1fr); }

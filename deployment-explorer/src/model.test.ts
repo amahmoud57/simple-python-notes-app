@@ -48,8 +48,9 @@ describe('deployment model', () => {
     expect(getNodeApi('regional')).toContain('PRIVATE NON-ARM SERVICE API')
     expect(getNodeApi('regional')).toContain('ClusterIP only')
     expect(getNodeApi('regional')).toContain('workload identity token + mTLS')
-    expect(getNodeApi('regional')).toContain('TriggerAsync (persist + signal)')
+    expect(getNodeApi('regional')).toContain('TriggerAsync (admit, resolve, persist + signal)')
     expect(getNodeApi('regional')).toContain('ResumeAsync (claim + execute)')
+    expect(getNodeApi('regional')).toContain('AppPostDeploymentCleanupReconciler')
   })
 
   it('explains the AppVersion ready gate as concrete build and runtime settings', () => {
@@ -70,15 +71,15 @@ describe('deployment model', () => {
     expect(buildStep?.result).toContain('runtime remains unchanged')
   })
 
-  it('tracks the old provider through candidate, switch, drain, and deletion', () => {
+  it('tracks native readiness, direct health, route switch, and background cleanup', () => {
     const scenario = getScenario('latest')
     const countAfter = (id: string) => scenario.steps.findIndex((step) => step.id === id) + 1
 
     expect(getCutoverState(scenario, 0)).toBe('existing')
-    expect(getCutoverState(scenario, countAfter('create-candidate'))).toBe('candidate')
+    expect(getCutoverState(scenario, countAfter('create-candidate'))).toBe('nativeReady')
     expect(getCutoverState(scenario, countAfter('direct-health'))).toBe('healthy')
     expect(getCutoverState(scenario, countAfter('activate-route'))).toBe('switched')
-    expect(getCutoverState(scenario, countAfter('promote-runtime'))).toBe('draining')
+    expect(getCutoverState(scenario, countAfter('promote-runtime'))).toBe('cleanupPending')
     expect(getCutoverState(scenario, scenario.steps.length - 1, scenario.steps.at(-1))).toBe('deleting')
     expect(getCutoverState(scenario, scenario.steps.length)).toBe('deleted')
   })
@@ -97,7 +98,7 @@ describe('deployment model', () => {
     expect(latest.steps.some((step) => step.id === 'resolve-revision')).toBe(true)
   })
 
-  it('models health as a gate on the candidate rather than a standalone entity', () => {
+  it('models ADC native readiness before one exact direct HTTP 200', () => {
     expect(nodes.map((node) => String(node.id))).not.toContain('health')
     expect(nodes.find((node) => node.id === 'version')?.group).toBe('control')
     expect(nodes.find((node) => node.id === 'existing')?.group).toBe('runtime')
@@ -112,8 +113,16 @@ describe('deployment model', () => {
     }
 
     const scenario = getScenario('manual')
-    expect(getNodeExample('candidate', scenario, 0, 'candidate').body).toContain('"directHealthGate"')
-    expect(getNodeExample('candidate', scenario, 0, 'healthy').body).toContain('"successfulResponses": 2')
+    const nativeReady = getNodeExample('candidate', scenario, 0, 'nativeReady').body
+    expect(nativeReady).toContain('"readinessProbe"')
+    expect(nativeReady).toContain('"retainedByAdc": true')
+    expect(nativeReady).toContain('"replicasReady": true')
+    expect(nativeReady).toContain('"state": "checking"')
+
+    const healthy = getNodeExample('candidate', scenario, 0, 'healthy').body
+    expect(healthy).toContain('"expectedStatus": 200')
+    expect(healthy).toContain('"state": "passed"')
+    expect(healthy).not.toContain('successfulResponses')
   })
 
   it('keeps Blob Storage and its label above the customer traffic divider', () => {
@@ -124,13 +133,14 @@ describe('deployment model', () => {
     expect((blob?.y ?? 0) + 110).toBeLessThan(trafficDividerY)
   })
 
-  it('models first deploy from an empty runtime without predecessor cleanup', () => {
+  it('models first deploy from an empty runtime without predecessor deletion', () => {
     const scenario = getScenario('manual')
     const countAfter = (id: string) => scenario.steps.findIndex((step) => step.id === id) + 1
 
     expect(scenario.label).toBe('First deploy')
     expect(scenario.hasExistingRuntime).toBe(false)
-    expect(scenario.steps.some((step) => step.id === 'delete-predecessor')).toBe(false)
+    expect(scenario.steps.some((step) => step.phase === 'postCleanup' && step.target === 'existing')).toBe(false)
+    expect(scenario.steps.some((step) => step.id === 'post-deployment-cleanup')).toBe(true)
     expect(getCutoverState(scenario, 0)).toBe('empty')
     expect(getCutoverState(scenario, countAfter('activate-route'))).toBe('switched')
     expect(getCutoverState(scenario, scenario.steps.length)).toBe('active')
@@ -184,7 +194,7 @@ describe('deployment model', () => {
     expect(ready).toContain('@sha256:71ab42d9c508')
   })
 
-  it('persists the operation before admitting the app and creating its AppVersion', () => {
+  it('reserves the app and creates its AppVersion before persisting the operation', () => {
     const scenario = getScenario('manual')
     const ids = scenario.steps.map((step) => step.id)
     const reserveIndex = ids.indexOf('reserve-app')
@@ -196,10 +206,10 @@ describe('deployment model', () => {
     const provisionIndex = ids.indexOf('import-artifact')
 
     expect(reserveIndex).toBeGreaterThan(-1)
-    expect(deploymentIndex).toBeLessThan(reserveIndex)
-    expect(reserveIndex).toBeLessThan(versionIndex)
     expect(reserveIndex).toBeLessThan(resolveIndex)
     expect(resolveIndex).toBeLessThan(versionIndex)
+    expect(versionIndex).toBeLessThan(deploymentIndex)
+    expect(deploymentIndex).toBeLessThan(buildIndex)
     expect(versionIndex).toBeLessThan(buildIndex)
     expect(buildIndex).toBeLessThan(readyIndex)
     expect(readyIndex).toBeLessThan(provisionIndex)
@@ -216,19 +226,21 @@ describe('deployment model', () => {
 
     const deployment = getNodeExample('deployment', scenario, deploymentIndex + 1, 'empty').body
     expect(deployment).toContain('"appVersionId": "ver_demo"')
-    expect(deployment).toContain('"status": "pending"')
+    expect(deployment).toContain('"status": "building"')
 
-    const reservedVersion = getNodeExample('version', scenario, deploymentIndex + 1, 'empty').body
-    expect(reservedVersion).toContain('ID reserved by the pending operation')
+    const versionBeforeDeployment = getNodeExample('version', scenario, deploymentIndex, 'empty').body
+    expect(versionBeforeDeployment).toContain('"status": "pending"')
+    expect(versionBeforeDeployment).not.toContain('not created yet')
   })
 
   it('distinguishes the durable operation from runtime deployment', () => {
     expect(nodes.find((node) => node.id === 'deployment')?.label).toBe('Deployment operation')
 
     const operationStep = getScenario('manual').steps.find((step) => step.id === 'create-deployment')
-    expect(operationStep?.title).toBe('Persist the build-and-deploy operation')
-    expect(operationStep?.reason).toContain('not the runtime deployment')
-    expect(operationStep?.result).toContain('no AppVersion document or runtime resources exist yet')
+    expect(operationStep?.title).toBe('Persist the operation for the new AppVersion')
+    expect(operationStep?.source).toBe('version')
+    expect(operationStep?.reason).toContain('The AppVersion now exists')
+    expect(operationStep?.result).toContain('appVersionId: ver_demo')
   })
 
   it('names the authenticated ARM identity fields instead of using an ambiguous caller label', () => {
@@ -247,10 +259,44 @@ describe('deployment model', () => {
   })
 
   it('keeps retained-version flows free of GitHub and build sandbox steps', () => {
-    for (const id of ['redeploy', 'rollback'] as const) {
-      const scenario = getScenario(id)
-      expect(scenario.steps.some((step) => step.source === 'github' || step.target === 'github')).toBe(false)
-      expect(scenario.steps.some((step) => step.source === 'build' || step.target === 'build')).toBe(false)
+    const scenario = getScenario('redeploy')
+    expect(scenario.steps.some((step) => step.source === 'github' || step.target === 'github')).toBe(false)
+    expect(scenario.steps.some((step) => step.source === 'build' || step.target === 'build')).toBe(false)
+    expect(scenarios.map((item) => item.id)).not.toContain('rollback')
+  })
+
+  it('marks deployment success before independently retried cleanup', () => {
+    const scenario = getScenario('latest')
+    const promoteIndex = scenario.steps.findIndex((step) => step.id === 'promote-runtime')
+    const cleanup = scenario.steps.find((step) => step.id === 'post-deployment-cleanup')
+
+    const promoted = getNodeExample('deployment', scenario, promoteIndex + 1, 'cleanupPending').body
+    expect(promoted).toContain('"status": "succeeded"')
+    expect(promoted).toContain('"postDeploymentCleanupStatus": "pending"')
+    expect(cleanup?.phase).toBe('postCleanup')
+    expect(cleanup?.reason).toContain('active AppVersion plus five distinct successful historical AppVersions')
+
+    const cleaned = getNodeExample('deployment', scenario, scenario.steps.length, 'deleted').body
+    expect(cleaned).toContain('"postDeploymentCleanupStatus": "completed"')
+  })
+
+  it('uses lifecycle ownership fields without invented route epoch fields', () => {
+    const scenario = getScenario('latest')
+    const route = getNodeExample('route', scenario, scenario.steps.length, 'deleted').body
+
+    expect(route).toContain('"ownerId": "app_shop"')
+    expect(route).toContain('"appLifecycleId": "alc_31"')
+    expect(route).toContain('"appVersionId": "ver_latest"')
+    expect(route).not.toContain('routeMutationFence')
+    expect(route).not.toContain('routeEpoch')
+    expect(route).not.toContain('executionEpoch')
+  })
+
+  it('documents that required authentication skips public route probing', () => {
+    for (const scenario of scenarios) {
+      const verificationStep = scenario.steps.find((step) => step.id === 'verify-customer-route' || step.id.endsWith('-verify'))
+      expect(verificationStep?.reason).toContain('Required')
+      expect(verificationStep?.reason).toContain('skip')
     }
   })
 })

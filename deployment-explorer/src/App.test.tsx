@@ -69,27 +69,31 @@ describe('Deployment Explorer', () => {
 
     fireEvent.click(previous)
     expect(screen.getByRole('heading', { name: 'Request a deployment through ARM' })).toBeInTheDocument()
-    expect(screen.getByLabelText('0 of 20 steps complete')).toBeInTheDocument()
+    expect(screen.getByLabelText(`0 of ${getScenario('manual').steps.length} steps complete`)).toBeInTheDocument()
     expect(previous).toBeDisabled()
   })
 
   it('jumps directly to any deployment sequence step', () => {
     const { container } = render(<App />)
+    const scenario = getScenario('manual')
+    const routeIndex = scenario.steps.findIndex((step) => step.id === 'activate-route')
+    const resolveIndex = scenario.steps.findIndex((step) => step.id === 'resolve-revision')
 
     fireEvent.click(screen.getByRole('button', { name: 'Run flow' }))
     expect(container.querySelector('.run-status')).toHaveTextContent('Reading pause')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Go to step 18: Generate the app URL and create its YARP route' }))
+    fireEvent.click(screen.getByRole('button', { name: `Go to step ${routeIndex + 1}: Generate the app URL and create its YARP route` }))
     expect(container.querySelector('.run-status')).toHaveTextContent('Ready')
     expect(screen.getByRole('heading', { name: 'Generate the app URL and create its YARP route' })).toBeInTheDocument()
-    expect(screen.getByLabelText('17 of 20 steps complete')).toBeInTheDocument()
+    expect(screen.getByLabelText(`${routeIndex} of ${scenario.steps.length} steps complete`)).toBeInTheDocument()
+    expect(container.querySelector('.candidate-health-gate')).toHaveAttribute('data-native-readiness-state', 'passed')
     expect(container.querySelector('.candidate-health-gate')).toHaveAttribute('data-health-state', 'passed')
     expect(container.querySelector('.traffic-routing')).toHaveAttribute('data-route-target', 'none')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Go to step 6: Resolve the configured branch to one commit' }))
+    fireEvent.click(screen.getByRole('button', { name: `Go to step ${resolveIndex + 1}: Resolve the configured branch to one commit` }))
     expect(screen.getByRole('heading', { name: 'Resolve the configured branch to one commit' })).toBeInTheDocument()
-    expect(screen.getByLabelText('5 of 20 steps complete')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Inspect AppVersion' })).toHaveTextContent('ID reserved')
+    expect(screen.getByLabelText(`${resolveIndex} of ${scenario.steps.length} steps complete`)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Inspect AppVersion' })).toHaveTextContent('Not created')
     expect(container.querySelector('.candidate-health-gate')).toHaveAttribute('data-health-state', 'absent')
     expect(container.querySelector('.traffic-routing')).toHaveAttribute('data-route-target', 'none')
   })
@@ -101,7 +105,8 @@ describe('Deployment Explorer', () => {
 
     expect(screen.getByRole('heading', { name: 'Request a retained-version redeploy' })).toBeInTheDocument()
     expect(screen.queryByText('Resolve main to an exact commit')).not.toBeInTheDocument()
-    expect(screen.getByText('Validate retained AppVersion ver_17')).toBeInTheDocument()
+    expect(screen.getByText('Select a reusable ready AppVersion')).toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: 'Rollback' })).not.toBeInTheDocument()
   })
 
   it('creates or switches one YARP backend route after the candidate passes health', () => {
@@ -114,7 +119,9 @@ describe('Deployment Explorer', () => {
     expect(screen.queryByRole('button', { name: 'Inspect Direct health check' })).not.toBeInTheDocument()
 
     const next = screen.getByRole('button', { name: 'Next step' })
-    for (let index = 0; index < 17; index += 1) fireEvent.click(next)
+    const firstActivationIndex = getScenario('manual').steps.findIndex((step) => step.id === 'activate-route')
+    for (let index = 0; index < firstActivationIndex; index += 1) fireEvent.click(next)
+    expect(container.querySelector('.candidate-health-gate')).toHaveAttribute('data-native-readiness-state', 'passed')
     expect(container.querySelector('.traffic-routing')).toHaveAttribute('data-route-target', 'none')
     expect(container.querySelector('.candidate-health-gate')).toHaveAttribute('data-health-state', 'passed')
 

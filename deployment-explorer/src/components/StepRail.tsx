@@ -1,4 +1,4 @@
-import { Check, Circle, GitBranch, History, RefreshCw, Rocket } from 'lucide-react'
+import { Check, Circle, GitBranch, RefreshCw, Rocket } from 'lucide-react'
 import { phaseLabels, type Scenario } from '../model'
 
 interface StepRailProps {
@@ -13,7 +13,6 @@ const scenarioIcons = {
   manual: Rocket,
   latest: GitBranch,
   redeploy: RefreshCw,
-  rollback: History,
 }
 
 export function StepRail({ scenarios, scenario, completedCount, onScenarioChange, onStepSelect }: StepRailProps) {

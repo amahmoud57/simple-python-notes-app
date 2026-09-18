@@ -23,7 +23,7 @@ export type Phase =
   | 'provisioning'
   | 'healthChecking'
   | 'activating'
-  | 'cleaningUp'
+  | 'postCleanup'
   | 'succeeded'
 
 export type PayloadKind =
@@ -49,11 +49,12 @@ export type CutoverState =
   | 'empty'
   | 'existing'
   | 'candidate'
+  | 'nativeReady'
   | 'healthy'
   | 'switched'
   | 'verified'
   | 'active'
-  | 'draining'
+  | 'cleanupPending'
   | 'deleting'
   | 'deleted'
 
@@ -83,7 +84,7 @@ export interface FlowStep {
 }
 
 export interface Scenario {
-  id: 'manual' | 'latest' | 'redeploy' | 'rollback'
+  id: 'manual' | 'latest' | 'redeploy'
   label: string
   title: string
   summary: string
@@ -108,7 +109,7 @@ export const phaseLabels: Record<Phase, string> = {
   provisioning: 'Provisioning',
   healthChecking: 'Health check',
   activating: 'Activating',
-  cleaningUp: 'Cleanup',
+  postCleanup: 'Background cleanup',
   succeeded: 'Succeeded',
 }
 
@@ -152,14 +153,14 @@ const demoCustomerUrl = `https://${demoCustomerHostname}`
 
 const createDeploymentStep = (deploymentId: string, appVersionId: string): FlowStep => step({
   id: 'create-deployment',
-  phase: 'pending',
-  title: 'Persist the build-and-deploy operation',
-  source: 'regional',
+  phase: 'building',
+  title: 'Persist the operation for the new AppVersion',
+  source: 'version',
   target: 'deployment',
-  payload: `operation ${deploymentId} + reserved AppVersion ID ${appVersionId}`,
+  payload: `${appVersionId} + runtime settings snapshot + previous provider`,
   payloadKind: 'resource',
-  reason: 'This is not the runtime deployment. Regional first records a durable build-and-deploy operation so ARM can return an operation ID and a reconciler can resume after a process restart.',
-  result: `Operation ${deploymentId}: pending; no AppVersion document or runtime resources exist yet`,
+  reason: 'The AppVersion now exists. Regional snapshots current settings, variables, linked services, and the previous provider into a durable Building operation that references it.',
+  result: `Operation ${deploymentId}: building; appVersionId: ${appVersionId}; execution signaled`,
   api: 'IBuilderAppDeploymentRepository.CreateAsync(deployment with { AppVersionId = versionId })',
 })
 
@@ -212,6 +213,7 @@ const sourceBuildSteps = (
     result: `AppVersion ${appVersionId}: pending; source and manifest are now immutable`,
     api: 'IAppVersionService.CreatePendingFromReferenceAsync(appId, versionId)',
   }),
+  createDeploymentStep(deploymentId, appVersionId),
   step({
     id: 'start-version-build',
     phase: 'building',
@@ -303,33 +305,34 @@ const sourceBuildSteps = (
   step({
     id: 'create-candidate',
     phase: 'provisioning',
-    title: 'Create a fresh Artifact App candidate',
+    title: 'Create the candidate and wait for ADC native readiness',
     source: 'artifact',
     target: 'candidate',
-    payload: 'Artifact Version + runtime settings',
+    payload: 'Artifact Version + runtime settings + HTTP Readiness probe',
     payloadKind: 'resource',
     reason: hasExistingRuntime
-      ? 'The active provider is never modified in place. A new isolated provider starts beside it.'
-      : 'This is the app first runtime provider. It starts isolated until health checks pass.',
-    result: 'candidate provisioned at 0% traffic',
-    api: 'PUT .../providers/Microsoft.App/artifactApps/embr-{deploymentHash}',
+      ? 'The active provider is never modified in place. Embr creates an isolated candidate with an ADC HTTP Readiness probe, confirms ADC retained that probe, then waits for every configured replica and app container to report Running, Started, and Ready.'
+      : 'Embr creates the first provider with an ADC HTTP Readiness probe, confirms ADC retained that probe, then waits for every configured replica and app container to report Running, Started, and Ready.',
+    result: 'ADC native readiness passed; candidate remains outside YARP traffic',
+    api: 'ArtifactAppRuntimeProvider.CreateCandidateAsync -> WaitForReplicaReadinessAsync',
     executionSurface: 'armApi',
-    cutoverAfter: 'candidate',
+    cutoverDuring: 'candidate',
+    cutoverAfter: 'nativeReady',
   }),
   step({
     id: 'direct-health',
     phase: 'healthChecking',
-    title: 'Prove the candidate healthy in isolation',
+    title: 'Verify the candidate through its direct HTTPS endpoint',
     source: 'regional',
     target: 'candidate',
     payload: 'GET /api/health',
     payloadKind: 'health',
     reason: hasExistingRuntime
-      ? 'Customer traffic stays on the old provider until the new candidate passes direct health.'
-      : 'The public route remains unassigned until the first provider passes direct health.',
+      ? 'Native readiness proves ADC can run the container, but not that direct ingress works. Embr requires one exact HTTP 200 from the allowlisted candidate FQDN while customer traffic stays on the old provider.'
+      : 'Native readiness proves ADC can run the container, but not that direct ingress works. Embr requires one exact HTTP 200 from the allowlisted candidate FQDN before creating a public route.',
     result: hasExistingRuntime
-      ? 'HTTP 200 twice; candidate remains at 0%'
-      : 'HTTP 200 twice; public route remains unassigned',
+      ? 'Direct HTTPS returned HTTP 200; candidate remains at 0%'
+      : 'Direct HTTPS returned HTTP 200; public route remains unassigned',
     api: 'GET https://{candidateFqdn}/api/health',
     executionSurface: 'nonArmApi',
     cutoverAfter: 'healthy',
@@ -350,9 +353,9 @@ const sourceBuildSteps = (
       ? 'The Builder App keeps its stable Embr hostname. YARP atomically replaces that hostname route so static paths, compute mounts, auth, and AppVersion identity all move together.'
       : 'Embr derives a stable hostname from the Builder App name, the last eight characters of its app ID, and the stamp routing domain, then creates the first YARP route for it.',
     result: hasExistingRuntime
-      ? `${demoCustomerHostname} now routes to ${versionLabel}; the previous provider is retained`
+      ? `${demoCustomerHostname} now routes to ${versionLabel}; the previous provider is unrouted and retained for verification`
       : `YARP route created: ${demoCustomerHostname} → ${versionLabel}`,
-    api: 'IYarpClient.ActivateAppRouteAsync(routeMutationFence, staticRouting, vms, backendPrefixes)',
+    api: 'IYarpClient.ActivateAppRouteAsync(new ActivateAppRouteRequest { OwnerId, AppLifecycleId, AppVersionId, Subdomain, Vms, BackendPrefixes, StaticRouting, Auth, AuthRevision })',
     executionSurface: 'nonArmApi',
     cutoverAfter: 'switched',
   }),
@@ -364,7 +367,7 @@ const sourceBuildSteps = (
     target: 'route',
     payload: 'GET /api/health',
     payloadKind: 'health',
-    reason: 'Embr calls the generated hostname through YARP. The response must be healthy and identify the expected AppVersion, proving the public route converged.',
+    reason: 'For this sample route, authentication is not Required, so Embr calls the generated hostname through YARP and requires HTTP 200 plus the expected AppVersion header. Required-auth routes skip this public probe.',
     result: `HTTP 200 + X-Embr-App-Version: ${appVersionId}`,
     api: `GET ${demoCustomerUrl}/api/health`,
     executionSurface: 'nonArmApi',
@@ -374,29 +377,28 @@ const sourceBuildSteps = (
     ? [
         step({
           id: 'promote-runtime',
-          phase: 'cleaningUp',
-          title: 'Promote the verified Deployment',
+          phase: 'succeeded',
+          title: 'Promote runtime and mark the operation succeeded',
           source: 'customer',
           target: 'app',
           payload: `activeDeploymentId: ${deploymentId}`,
           payloadKind: 'route',
-          reason: 'Only after the generated hostname succeeds through YARP does Embr persist the new active deployment and the same URL on BuilderApp.runtime.',
-          result: `${versionLabel} active at the unchanged customer URL; the previous provider drains for a 5 minute grace period`,
+          reason: 'After route verification, Embr persists the new runtime, marks the operation Succeeded, releases the app slot, and records postDeploymentCleanupStatus=pending.',
+          result: `${versionLabel} active; operation succeeded; previous provider is unrouted; background cleanup pending`,
           api: `IBuilderAppRepository.UpdateWithRetryAsync(runtime.activeDeploymentId = ${deploymentId})`,
-          cutoverAfter: 'draining',
+          cutoverAfter: 'cleanupPending',
         }),
         step({
-          id: 'delete-predecessor',
-          phase: 'succeeded',
-          title: 'Delete the old provider after the grace period',
+          id: 'post-deployment-cleanup',
+          phase: 'postCleanup',
+          title: 'Run durable post-deployment cleanup',
           source: 'regional',
           target: 'existing',
-          payload: 'cleanup deadline elapsed',
+          payload: 'postDeploymentCleanupStatus: pending',
           payloadKind: 'delete',
-          reason: 'The old Artifact App is retained until route convergence and connection draining are safe.',
-          result: 'old Artifact App and ADC Artifact deleted',
-          api: 'DELETE .../artifactApps/{old}; DELETE .../artifacts/{old}',
-          executionSurface: 'armApi',
+          reason: 'A background reconciler processes successful operations independently. It deletes the previous Artifact App, keeps the active AppVersion plus five distinct successful historical AppVersions, and removes older Blob and ACR outputs. Failures leave cleanup pending for retry without changing deployment success.',
+          result: 'previous Artifact App deleted; retention applied; postDeploymentCleanupStatus: completed',
+          api: 'AppPostDeploymentCleanupReconciler -> AppPostDeploymentCleanupService.CleanupAsync',
           cutoverDuring: 'deleting',
           cutoverAfter: 'deleted',
         }),
@@ -410,9 +412,22 @@ const sourceBuildSteps = (
           target: 'app',
           payload: `activeDeploymentId: ${deploymentId}`,
           payloadKind: 'route',
-          reason: 'Only after the generated hostname succeeds through YARP does Embr create BuilderApp.runtime and persist its URL and active deployment ID.',
-          result: `BuilderApp.runtime.url saved; ${versionLabel} is active and there is no predecessor to delete`,
+          reason: 'Only after the generated hostname succeeds through YARP does Embr create BuilderApp.runtime, mark the operation Succeeded, release the app slot, and queue post-deployment retention cleanup.',
+          result: `BuilderApp.runtime.url saved; ${versionLabel} active; operation succeeded; background cleanup pending`,
           api: `IBuilderAppRepository.UpdateWithRetryAsync(runtime.activeDeploymentId = ${deploymentId})`,
+          cutoverAfter: 'active',
+        }),
+        step({
+          id: 'post-deployment-cleanup',
+          phase: 'postCleanup',
+          title: 'Complete background artifact retention cleanup',
+          source: 'regional',
+          target: 'deployment',
+          payload: 'postDeploymentCleanupStatus: pending',
+          payloadKind: 'delete',
+          reason: 'The background reconciler applies the active-plus-five-history retention policy and marks cleanup complete. There is no previous Artifact App on a first deployment.',
+          result: 'retention applied; postDeploymentCleanupStatus: completed',
+          api: 'AppPostDeploymentCleanupReconciler -> AppArtifactRetentionService.CleanupAsync',
           cutoverAfter: 'active',
         }),
       ]),
@@ -457,18 +472,17 @@ const manualSteps: FlowStep[] = [
     result: 'Builder App configuration is valid; deployment ID adp_demo and AppVersion ID ver_demo are reserved',
     api: 'GetByIdAsync -> ValidateAppConfiguration -> runtimeProvider.IsConfigured',
   }),
-  createDeploymentStep('adp_demo', 'ver_demo'),
   step({
     id: 'reserve-app',
     phase: 'pending',
     title: 'Reserve the Builder App for this operation',
-    source: 'deployment',
+    source: 'regional',
     target: 'app',
     payload: 'pendingDeploymentId: adp_demo',
     payloadKind: 'resource',
-    reason: 'ResumeAsync admits one non-terminal Deployment at a time by claiming the Builder App pendingDeploymentId slot.',
-    result: 'BuilderApp.pendingDeploymentId = adp_demo; this operation owns execution',
-    api: 'ResumeAsync -> AdmitAsync -> TryAdmitDeploymentAsync',
+    reason: 'TriggerAsync admits one non-terminal operation at a time by atomically claiming the Builder App pendingDeploymentId slot before resolving source.',
+    result: 'BuilderApp.pendingDeploymentId = adp_demo; no deployment operation document exists yet',
+    api: 'TriggerInternalAsync -> AdmitAsync -> TryAdmitDeploymentAsync',
   }),
   ...sourceBuildSteps(true, 'adp_demo', 'ver_demo', 'v1', false),
 ]
@@ -512,89 +526,86 @@ const latestRevisionSteps: FlowStep[] = [
     result: 'Builder App configuration valid; deployment ID adp_latest and AppVersion ID ver_latest are reserved',
     api: 'GetByIdAsync -> ValidateAppConfiguration -> runtimeProvider.IsConfigured',
   }),
-  createDeploymentStep('adp_latest', 'ver_latest'),
   step({
     id: 'reserve-app',
     phase: 'pending',
     title: 'Reserve the Builder App for this operation',
-    source: 'deployment',
+    source: 'regional',
     target: 'app',
     payload: 'pendingDeploymentId: adp_latest',
     payloadKind: 'resource',
-    reason: 'The app pendingDeploymentId slot prevents two manual Deployments from executing concurrently.',
-    result: 'BuilderApp.pendingDeploymentId = adp_latest; this operation owns execution',
-    api: 'ResumeAsync -> AdmitAsync -> TryAdmitDeploymentAsync',
+    reason: 'TriggerAsync claims the pendingDeploymentId slot before resolving the latest branch head, so two manual deployments cannot start concurrently.',
+    result: 'BuilderApp.pendingDeploymentId = adp_latest; no deployment operation document exists yet',
+    api: 'TriggerInternalAsync -> AdmitAsync -> TryAdmitDeploymentAsync',
   }),
   ...sourceBuildSteps(true, 'adp_latest', 'ver_latest', 'v17', true),
 ]
 
-const retainedSteps = (action: 'redeploy' | 'rollback'): FlowStep[] => {
-  const targetVersion = action === 'rollback' ? 'ver_15' : 'ver_17'
-  return [
+const redeploySteps: FlowStep[] = [
     step({
-      id: `${action}-request`,
+      id: 'redeploy-request',
       phase: 'pending',
-      title: action === 'rollback' ? 'Request rollback to AppVersion v15' : 'Request a retained-version redeploy',
+      title: 'Request a retained-version redeploy',
       source: 'client',
       target: 'arm',
-      payload: action === 'rollback' ? 'POST /rollback + ver_15' : 'POST /redeploy',
+      payload: 'POST /redeploy',
       payloadKind: 'request',
-      reason: action === 'rollback' ? 'The customer selects a historical immutable version.' : 'The customer asks for fresh runtime resources without rebuilding source.',
+      reason: 'The customer asks for fresh runtime resources without resolving GitHub or rebuilding source.',
       result: '202 Accepted + operation URL',
-      api: `POST .../Microsoft.Web/builderApps/shop/${action}`,
+      api: 'POST .../Microsoft.Web/builderApps/shop/redeploy',
       executionSurface: 'armApi',
     }),
     step({
-      id: `${action}-regional`,
+      id: 'redeploy-regional',
       phase: 'pending',
-      title: `Forward the authenticated ${action} request`,
+      title: 'Forward the authenticated redeploy request',
       source: 'arm',
       target: 'regional',
-      payload: `Microsoft Entra tenant ID + object ID + ${action} request ID`,
+      payload: 'Microsoft Entra tenant ID + object ID + redeploy request ID',
       payloadKind: 'request',
       reason: 'ARM forwards identity from the authenticated Microsoft Entra principal together with the action metadata.',
       result: 'Regional receives AppId, trigger metadata, and Entra identity { tenantId, objectId }',
-      api: `AppDeploymentService.Trigger${action === 'rollback' ? 'Rollback' : 'Redeploy'}Async`,
+      api: 'AppDeploymentService.TriggerRedeployAsync',
       executionSurface: 'nonArmApi',
     }),
     step({
-      id: `${action}-reserve-app`,
+      id: 'redeploy-reserve-app',
       phase: 'pending',
       title: 'Validate and reserve the existing Builder App',
       source: 'regional',
       target: 'app',
-      payload: `app_shop + adp_${action}`,
+      payload: 'app_shop + adp_redeploy',
       payloadKind: 'resource',
       reason: 'The Builder App already exists. Regional claims its one pending deployment slot.',
-      result: `BuilderApp.PendingDeploymentId = adp_${action}`,
+      result: 'BuilderApp.PendingDeploymentId = adp_redeploy',
       api: 'GetByIdAsync -> TryAdmitDeploymentAsync',
     }),
     step({
-      id: `${action}-select-version`,
+      id: 'redeploy-select-version',
       phase: 'provisioning',
-      title: `Validate retained AppVersion ${targetVersion}`,
+      title: 'Select a reusable ready AppVersion',
       source: 'app',
       target: 'version',
-      payload: `AppVersion ${targetVersion}`,
+      payload: 'active version, else newest successful ready version',
       payloadKind: 'resource',
-      reason: 'The version must be Ready, lifecycle-scoped, complete, and still available.',
-      result: `${targetVersion}: ready with retained outputs`,
-      api: 'IBuilderAppVersionRepository.GetByIdAsync -> CanActivateRetainedVersionAsync',
+      reason: 'Regional first tries the active deployment AppVersion. If there is no active runtime, it scans the current lifecycle for the newest successful deployment whose AppVersion is Ready and still has complete outputs.',
+      result: 'ver_17 selected with retained immutable outputs; no source resolution or build required',
+      api: 'ResolveReusableVersionAsync -> RequireReusableVersion',
     }),
     step({
-      id: `${action}-create-deployment`,
+      id: 'redeploy-create-deployment',
       phase: 'provisioning',
       title: 'Create an operation for the retained AppVersion',
-      source: 'regional',
+      source: 'version',
       target: 'deployment',
-      payload: `${targetVersion} + runtime settings snapshot`,
+      payload: 'ver_17 + current runtime settings snapshot',
       payloadKind: 'resource',
       reason: 'The retained AppVersion already exists and is ready, so the new operation can apply it without rebuilding source.',
-      result: `Operation adp_${action}: provisioning, appVersionId: ${targetVersion}`,
+      result: 'Operation adp_redeploy: provisioning, action: redeploy, appVersionId: ver_17',
       api: 'IBuilderAppDeploymentRepository.CreateAsync(deployment with { AppVersionId = retainedVersionId })',
     }),
     step({
-      id: `${action}-artifact`,
+      id: 'redeploy-artifact',
       phase: 'provisioning',
       title: 'Recreate the deployment-owned ADC Artifact',
       source: 'version',
@@ -607,98 +618,97 @@ const retainedSteps = (action: 'redeploy' | 'rollback'): FlowStep[] => {
       executionSurface: 'armApi',
     }),
     step({
-      id: `${action}-candidate`,
+      id: 'redeploy-candidate',
       phase: 'provisioning',
-      title: 'Create a fresh Artifact App candidate',
+      title: 'Create the candidate and wait for ADC native readiness',
       source: 'artifact',
       target: 'candidate',
-      payload: `${targetVersion} outputs + current settings`,
+      payload: 'ver_17 outputs + current settings + HTTP Readiness probe',
       payloadKind: 'resource',
-      reason: 'Redeploy and rollback are still blue-green; an old provider is never revived in place.',
-      result: 'new candidate at 0% traffic',
-      api: 'PUT .../providers/Microsoft.App/artifactApps/embr-{newDeploymentHash}',
+      reason: 'Redeploy is still blue-green: Embr creates a fresh provider, confirms ADC retained the configured Readiness probe, and waits for every configured replica and app container to report Running, Started, and Ready.',
+      result: 'ADC native readiness passed; new candidate remains outside YARP traffic',
+      api: 'ArtifactAppRuntimeProvider.CreateCandidateAsync -> WaitForReplicaReadinessAsync',
       executionSurface: 'armApi',
-      cutoverAfter: 'candidate',
+      cutoverDuring: 'candidate',
+      cutoverAfter: 'nativeReady',
     }),
     step({
-      id: `${action}-health`,
+      id: 'redeploy-health',
       phase: 'healthChecking',
-      title: 'Health-check the isolated candidate',
+      title: 'Verify the candidate through its direct HTTPS endpoint',
       source: 'regional',
       target: 'candidate',
       payload: 'GET /api/health',
       payloadKind: 'health',
-      reason: 'The current provider keeps serving until the replacement proves healthy.',
-      result: 'HTTP 200 twice; candidate remains at 0%',
+      reason: 'Native readiness does not prove direct ingress. Embr requires one exact HTTP 200 while the current provider keeps serving.',
+      result: 'Direct HTTPS returned HTTP 200; candidate remains at 0%',
       api: 'GET https://{candidateFqdn}/api/health',
       executionSurface: 'nonArmApi',
       cutoverAfter: 'healthy',
     }),
     step({
-      id: `${action}-route`,
+      id: 'redeploy-route',
       phase: 'activating',
-      title: `Atomically switch YARP to ${targetVersion}`,
+      title: 'Atomically switch YARP to ver_17',
       source: 'regional',
       target: 'route',
       payload: 'retained static + compute route',
       payloadKind: 'route',
       reason: 'Static and compute destinations move to the selected version together.',
-      result: `YARP targets ${targetVersion}; old provider retained`,
+      result: 'YARP targets ver_17; old provider is now unrouted',
       api: 'IYarpClient.ActivateAppRouteAsync',
       executionSurface: 'nonArmApi',
       cutoverAfter: 'switched',
     }),
     step({
-      id: `${action}-verify`,
+      id: 'redeploy-verify',
       phase: 'activating',
       title: 'Verify the selected version through the customer URL',
       source: 'customer',
       target: 'route',
       payload: 'GET /api/health',
       payloadKind: 'health',
-      reason: 'The public response must identify the selected retained AppVersion.',
-      result: `X-Embr-App-Version: ${targetVersion}`,
-      api: 'GET https://shop.embr.example/api/health',
+      reason: 'For this sample route, authentication is not Required, so the public response must return HTTP 200 and identify the selected retained AppVersion. Required-auth routes skip this probe.',
+      result: 'HTTP 200 + X-Embr-App-Version: ver_17',
+      api: `GET ${demoCustomerUrl}/api/health`,
       executionSurface: 'nonArmApi',
       cutoverAfter: 'verified',
     }),
     step({
-      id: `${action}-promote`,
-      phase: 'cleaningUp',
-      title: `Promote ${targetVersion} and drain the old provider`,
+      id: 'redeploy-promote',
+      phase: 'succeeded',
+      title: 'Promote ver_17 and mark the operation succeeded',
       source: 'customer',
       target: 'app',
-      payload: `activeAppVersionId: ${targetVersion}`,
+      payload: 'activeDeploymentId: adp_redeploy',
       payloadKind: 'route',
-      reason: 'The selected version becomes active only after public verification.',
-      result: 'new provider active; old provider enters grace period',
+      reason: 'After route verification, Embr persists the new runtime, marks the operation Succeeded, releases the app slot, and records postDeploymentCleanupStatus=pending.',
+      result: 'new provider active; operation succeeded; previous provider is unrouted; background cleanup pending',
       api: 'IBuilderAppRepository.UpdateWithRetryAsync(runtime.activeDeploymentId)',
-      cutoverAfter: 'draining',
+      cutoverAfter: 'cleanupPending',
     }),
     step({
-      id: `${action}-delete`,
-      phase: 'succeeded',
-      title: 'Delete the old provider after the grace period',
+      id: 'redeploy-post-deployment-cleanup',
+      phase: 'postCleanup',
+      title: 'Run durable post-deployment cleanup',
       source: 'regional',
       target: 'existing',
-      payload: 'cleanup deadline elapsed',
+      payload: 'postDeploymentCleanupStatus: pending',
       payloadKind: 'delete',
-      reason: 'The previous resources remain available until route convergence and draining are safe.',
-      result: 'old Artifact App and ADC Artifact deleted',
-      api: 'DELETE .../artifactApps/{old}; DELETE .../artifacts/{old}',
-      executionSurface: 'armApi',
+      reason: 'A background reconciler deletes the previous Artifact App, protects the active plus five successful historical AppVersions, removes older Blob/ACR outputs, and retries independently if cleanup fails.',
+      result: 'previous Artifact App deleted; retention applied; postDeploymentCleanupStatus: completed',
+      api: 'AppPostDeploymentCleanupReconciler -> AppPostDeploymentCleanupService.CleanupAsync',
       cutoverDuring: 'deleting',
       cutoverAfter: 'deleted',
     }),
-  ]
-}
+]
 
 export const scenarios: Scenario[] = [
   {
     id: 'manual',
     label: 'First deploy',
     title: 'Build and activate version 1',
-    summary: 'A durable build-and-deploy operation is recorded first so work can resume after a restart. It creates and builds AppVersion v1; runtime provisioning begins only after that version is ready.',
+    summary: 'Regional reserves the app, resolves source, creates AppVersion v1, then persists a Building operation. Runtime provisioning begins only after the AppVersion is ready.',
     hasExistingRuntime: false,
     oldVersion: null,
     newVersion: 'v1',
@@ -726,18 +736,7 @@ export const scenarios: Scenario[] = [
     oldVersion: 'v17-a',
     newVersion: 'v17-b',
     appVersionId: 'ver_17',
-    steps: retainedSteps('redeploy'),
-  },
-  {
-    id: 'rollback',
-    label: 'Rollback',
-    title: 'Activate retained AppVersion v15',
-    summary: 'A historical ready version receives fresh runtime resources, public verification, and an atomic route switch.',
-    hasExistingRuntime: true,
-    oldVersion: 'v17',
-    newVersion: 'v15',
-    appVersionId: 'ver_15',
-    steps: retainedSteps('rollback'),
+    steps: redeploySteps,
   },
 ]
 
@@ -765,7 +764,7 @@ export function getNodeLabel(node: SystemNode, scenario: Scenario): string {
 const apiByNode: Record<NodeId, string> = {
   client: 'POST .../Microsoft.Web/builderApps/{name}/deploy\nGET {Azure-AsyncOperation}\nGET .../builderApps/{app}/deployments/{id}',
   arm: 'PUBLIC ARM API · Microsoft.Web protocol adapter\n\nPOST /subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Web/builderApps/{name}/deploy?api-version=...\n\nValidates ARM caller + subscription access + idempotency key\nReturns 202 + Azure-AsyncOperation + Retry-After\nCalls Regional through RegionalApiClient',
-  regional: 'PRIVATE NON-ARM SERVICE API · ClusterIP only\nCaller: Embr.Arm.Api through RegionalApiClient\nAuth: ARM workload identity token + mTLS + service object-ID pin\n\nPOST /internal/regional/v1/builder-apps/deploy\n  -> AppDeploymentService.TriggerAsync (persist + signal)\n\nBackground dispatcher/reconciler\n  -> AppDeploymentService.ResumeAsync (claim + execute)',
+  regional: 'PRIVATE NON-ARM SERVICE API · ClusterIP only\nCaller: Embr.Arm.Api through RegionalApiClient\nAuth: ARM workload identity token + mTLS + service object-ID pin\n\nPOST /internal/regional/v1/builder-apps/deploy\n  -> AppDeploymentService.TriggerAsync (admit, resolve, persist + signal)\n\nBackground dispatcher/reconciler\n  -> AppDeploymentService.ResumeAsync (claim + execute)\n  -> AppPostDeploymentCleanupReconciler (retry cleanup)',
   deployment: 'IBuilderAppDeploymentRepository.CreateAsync\nTryClaimExecutionAsync\nUpdateWithRetryAsync\nReleaseDeploymentAsync',
   app: 'PUT | GET | PATCH | DELETE .../Microsoft.Web/builderApps/{name}\nTryAdmitDeploymentAsync',
   github: 'CreateInstallationToken\nGetBranchShaAsync\nGetFileContentAsync\nGetCloneUrlAsync',
@@ -775,10 +774,10 @@ const apiByNode: Record<NodeId, string> = {
   blob: 'GetStaticAssetsContainerSasUrlAsync\nazcopy copy --recursive --put-md5\nMarkStaticAssetsCompleteAsync',
   acr: 'POST {registry}/scheduleRun?api-version=2019-04-01\nGET {registry}/runs/{runId}',
   artifact: 'PUT | GET | DELETE .../providers/Microsoft.App/artifacts/{name}',
-  candidate: 'PUT | GET | DELETE .../providers/Microsoft.App/artifactApps/{name}\nGET https://{candidateFqdn}/{run.healthCheckPath}\nAppEndpointProbe.WaitForHealthyAsync',
-  existing: 'IAppRouteActivator.ActivateAsync(previousVersion)\nDELETE old artifactApps + artifacts after grace',
-  route: 'IYarpClient.ActivateAppRouteAsync\nIYarpClient.GetAppAsync\nCosmos ReplaceItemAsync(IfMatchEtag)',
-  customer: 'SubdomainHelper.ComputeAppSubdomain(app.Name, app.Id, routingDomain)\n  -> {sanitized-name}-{last-8-of-app-id}.{routingDomain}\n\nAppRouteActivator.ActivateAsync\n  -> IYarpClient.ActivateAppRouteAsync(subdomain, destinations)\n\nGET https://{generated-hostname}/{healthCheckPath}\n  -> expect X-Embr-App-Version\n\nAfter verification: BuilderApp.runtime.url = https://{generated-hostname}',
+  candidate: 'PUT | GET | DELETE .../providers/Microsoft.App/artifactApps/{name}\nWaitForReplicaReadinessAsync (probe retained + replicas/containers Running, Started, Ready)\nGET https://{candidateFqdn}/{run.healthCheckPath}\nAppEndpointProbe.WaitForHealthyAsync (one exact HTTP 200)',
+  existing: 'Previous Artifact App becomes unrouted at activation\nAppPostDeploymentCleanupReconciler deletes it after deployment success',
+  route: 'IYarpClient.ActivateAppRouteAsync(ActivateAppRouteRequest)\nFields: ownerId, appLifecycleId, appVersionId, subdomain, vms, backendPrefixes, staticRouting, auth, authRevision\nLifecycle ownership prevents an older app incarnation from taking over the route.',
+  customer: 'SubdomainHelper.ComputeAppSubdomain(app.Name, app.Id, routingDomain)\n  -> {sanitized-name}-{last-8-of-app-id}.{routingDomain}\n\nAppRouteActivator.ActivateAsync\n  -> IYarpClient.ActivateAppRouteAsync(request)\n\nUnless auth mode is Required:\nGET https://{generated-hostname}/{healthCheckPath}\n  -> expect HTTP 200 + X-Embr-App-Version\n\nAfter verification: BuilderApp.runtime.url = https://{generated-hostname}',
 }
 
 export function getNodeApi(id: NodeId): string {
@@ -802,31 +801,33 @@ export function getNodeExample(
       ? 'adp_latest'
       : `adp_${scenario.id}`
   const versionId = scenario.appVersionId
-  const versionCreated = scenario.id === 'redeploy' || scenario.id === 'rollback' || completedIds.has('create-version')
+  const versionCreated = scenario.id === 'redeploy' || completedIds.has('create-version')
   const deploymentCreated = completedIds.has('create-deployment')
     || [...completedIds].some((item) => item.endsWith('-create-deployment'))
   const appReserved = completedIds.has('reserve-app')
     || [...completedIds].some((item) => item.endsWith('-reserve-app'))
-  const staticPublished = scenario.id === 'redeploy' || scenario.id === 'rollback' || completedIds.has('publish-static')
-  const imagePublished = scenario.id === 'redeploy' || scenario.id === 'rollback' || completedIds.has('publish-image')
-  const versionBuilding = scenario.id === 'redeploy' || scenario.id === 'rollback' || completedIds.has('start-version-build')
-  const versionReady = scenario.id === 'redeploy' || scenario.id === 'rollback' || completedIds.has('finish-version-build')
-  const candidateCreated = ['candidate', 'healthy', 'switched', 'verified', 'active', 'draining', 'deleting', 'deleted'].includes(cutover)
-  const candidateHealthy = ['healthy', 'switched', 'verified', 'active', 'draining', 'deleting', 'deleted'].includes(cutover)
-  const switched = ['switched', 'verified', 'active', 'draining', 'deleting', 'deleted'].includes(cutover)
-  const promoted = ['active', 'draining', 'deleting', 'deleted'].includes(cutover)
-  const deploymentStatus = completedCount === scenario.steps.length
+  const staticPublished = scenario.id === 'redeploy' || completedIds.has('publish-static')
+  const imagePublished = scenario.id === 'redeploy' || completedIds.has('publish-image')
+  const versionBuilding = scenario.id === 'redeploy' || completedIds.has('start-version-build')
+  const versionReady = scenario.id === 'redeploy' || completedIds.has('finish-version-build')
+  const candidateCreated = ['candidate', 'nativeReady', 'healthy', 'switched', 'verified', 'active', 'cleanupPending', 'deleting', 'deleted'].includes(cutover)
+  const candidateNativeReady = ['nativeReady', 'healthy', 'switched', 'verified', 'active', 'cleanupPending', 'deleting', 'deleted'].includes(cutover)
+  const candidateHealthy = ['healthy', 'switched', 'verified', 'active', 'cleanupPending', 'deleting', 'deleted'].includes(cutover)
+  const switched = ['switched', 'verified', 'active', 'cleanupPending', 'deleting', 'deleted'].includes(cutover)
+  const promoted = ['active', 'cleanupPending', 'deleting', 'deleted'].includes(cutover)
+  const cleanupCompleted = [...completedIds].some((item) => item.endsWith('post-deployment-cleanup'))
+  const deploymentStatus = promoted
     ? 'succeeded'
-    : promoted
-      ? 'cleaningUp'
-      : switched
-        ? 'activating'
-        : candidateCreated
+    : switched
+      ? 'activating'
+      : candidateCreated
+        ? 'provisioning'
+        : versionReady
           ? 'provisioning'
-          : versionReady
-            ? 'provisioning'
-            : versionBuilding
-              ? 'building'
+          : versionBuilding
+            ? 'building'
+            : deploymentCreated
+              ? scenario.id === 'redeploy' ? 'provisioning' : 'building'
               : 'pending'
   const image = `embr.azurecr.io/builder/app_shop/api@sha256:71ab42d9c508...`
   const candidateName = `embr-${deploymentId.replace('adp_', '')}-7c2f`
@@ -865,7 +866,7 @@ export function getNodeExample(
       }
     case 'deployment':
       if (!deploymentCreated) return { title: 'Deployment before creation', format: 'JSON', body: json({ id: deploymentId, state: 'not created yet', waitingFor: 'validated Builder App configuration and trigger metadata' }) }
-      return { title: 'BuilderAppDeployment operation document', format: 'JSON', body: json({ id: deploymentId, appId: 'app_shop', appVersionId: versionId, status: deploymentStatus, action: scenario.id === 'manual' || scenario.id === 'latest' ? 'deploy' : scenario.id, candidateFqdn: candidateCreated ? candidateFqdn : undefined, publicUrl: switched ? demoCustomerUrl : undefined, previousDeploymentId: scenario.hasExistingRuntime ? 'adp_previous' : undefined, completedAt: completedCount === scenario.steps.length ? '2026-09-16T18:42:31Z' : undefined }) }
+      return { title: 'BuilderAppDeployment operation document', format: 'JSON', body: json({ id: deploymentId, appId: 'app_shop', appVersionId: versionId, status: deploymentStatus, action: scenario.id === 'manual' || scenario.id === 'latest' ? 'deploy' : scenario.id, candidateFqdn: candidateCreated ? candidateFqdn : undefined, publicUrl: switched ? demoCustomerUrl : undefined, previousDeploymentId: scenario.hasExistingRuntime ? 'adp_previous' : undefined, postDeploymentCleanupStatus: promoted ? cleanupCompleted ? 'completed' : 'pending' : undefined, completedAt: promoted ? '2026-09-16T18:42:31Z' : undefined }) }
     case 'app':
       return { title: 'Pre-existing Microsoft.Web/builderApps resource', format: 'JSON', body: json({ name: 'deployment-explorer-demo', type: 'Microsoft.Web/builderApps', properties: { lifecycleId: 'alc_31', sourceIntegrationState: 'Configured', pendingDeploymentId: appReserved && !promoted ? deploymentId : null, runtime: promoted ? { activeDeploymentId: deploymentId, activeAppVersionId: versionId, url: demoCustomerUrl } : scenario.hasExistingRuntime ? { activeDeploymentId: 'adp_previous', activeAppVersionId: scenario.oldVersion, url: demoCustomerUrl } : null } }) }
     case 'github':
@@ -873,7 +874,7 @@ export function getNodeExample(
     case 'manifest':
       return { title: 'builder.yaml', format: 'YAML', body: 'components:\n  - name: web\n    rootDirectory: frontend\n    path: /\n  - name: api\n    rootDirectory: backend\n    path: /api\n    run:\n      healthCheckPath: /health\n\n# web produces static output\n# api produces compute output' }
     case 'version':
-      if (!versionCreated) return { title: 'AppVersion before creation', format: 'JSON', body: json({ id: versionId, state: deploymentCreated ? 'ID reserved by the pending operation; AppVersion document not created yet' : 'not created yet', createdFrom: ['exact GitHub revision', 'validated builder.yaml'] }) }
+      if (!versionCreated) return { title: 'AppVersion before creation', format: 'JSON', body: json({ id: versionId, state: 'not created yet', waitingFor: ['exact GitHub revision', 'validated builder.yaml'] }) }
       return {
         title: 'Evolving BuilderAppVersion document',
         format: 'JSON',
@@ -911,12 +912,12 @@ export function getNodeExample(
     case 'artifact':
       return { title: 'Microsoft.App/artifacts resource', format: 'JSON', body: json({ id: `/subscriptions/runtime-sub/resourceGroups/runtime-rg/providers/Microsoft.App/artifacts/${candidateName}`, type: 'Microsoft.App/artifacts', properties: { provisioningState: candidateCreated ? 'Succeeded' : 'NotCreated', source: { kind: 'registry', imageUrl: image }, latestVersionState: candidateCreated ? 'Ready' : null } }) }
     case 'candidate':
-      return { title: 'Microsoft.App/artifactApps candidate', format: 'JSON', body: json({ id: `/subscriptions/runtime-sub/resourceGroups/runtime-rg/providers/Microsoft.App/artifactApps/${candidateName}`, type: 'Microsoft.App/artifactApps', properties: { provisioningState: candidateCreated ? 'Succeeded' : 'NotCreated', ingress: { external: true, targetPort: 8000, fqdn: candidateCreated ? candidateFqdn : null }, scale: { minReplicas: 1, maxReplicas: 1 }, directHealthGate: candidateCreated ? { endpoint: `https://${candidateFqdn}/api/health`, state: candidateHealthy ? 'passed' : 'waiting', successfulResponses: candidateHealthy ? 2 : 0 } : null } }) }
+      return { title: 'Microsoft.App/artifactApps candidate', format: 'JSON', body: json({ id: `/subscriptions/runtime-sub/resourceGroups/runtime-rg/providers/Microsoft.App/artifactApps/${candidateName}`, type: 'Microsoft.App/artifactApps', properties: { provisioningState: candidateCreated ? 'Succeeded' : 'NotCreated', ingress: { external: true, targetPort: 8000, fqdn: candidateCreated ? candidateFqdn : null }, scale: { minReplicas: 1, maxReplicas: 1 }, readinessProbe: candidateCreated ? { type: 'Http', path: '/api/health', port: 8000, retainedByAdc: candidateNativeReady, replicasReady: candidateNativeReady } : null, directHealthGate: candidateCreated ? { endpoint: `https://${candidateFqdn}/api/health`, expectedStatus: 200, state: candidateHealthy ? 'passed' : candidateNativeReady ? 'checking' : 'waitingForNativeReadiness' } : null } }) }
     case 'existing':
       if (!scenario.hasExistingRuntime) return { title: 'Runtime before first deployment', format: 'JSON', body: json({ resourceId: null, appVersionId: null, state: 'no Artifact App exists yet', servingCustomerTraffic: false }) }
-      return { title: 'Existing Artifact App', format: 'JSON', body: json({ appVersionId: scenario.oldVersion, resourceId: '/subscriptions/runtime-sub/resourceGroups/runtime-rg/providers/Microsoft.App/artifactApps/embr-existing', servingCustomerTraffic: !switched, state: cutover === 'deleted' ? 'deleted' : cutover === 'deleting' ? 'deleting' : promoted ? 'draining' : 'serving' }) }
+      return { title: 'Existing Artifact App', format: 'JSON', body: json({ appVersionId: scenario.oldVersion, resourceId: '/subscriptions/runtime-sub/resourceGroups/runtime-rg/providers/Microsoft.App/artifactApps/embr-existing', servingCustomerTraffic: !switched, state: cutover === 'deleted' ? 'deleted' : cutover === 'deleting' ? 'deleting' : promoted ? 'unroutedCleanupPending' : switched ? 'unroutedRetainedForVerification' : 'serving' }) }
     case 'route':
-      return { title: 'YARP route document', format: 'JSON', body: json({ ownerId: 'app_shop', state: switched || scenario.hasExistingRuntime ? 'assigned' : 'not created', hostnameGeneratedBy: 'SubdomainHelper.ComputeAppSubdomain(appName, appId, routingDomain)', subdomain: switched || scenario.hasExistingRuntime ? demoCustomerHostname : null, appVersionId: switched ? versionId : scenario.oldVersion, vms: switched ? [`https://${candidateFqdn}/`] : scenario.hasExistingRuntime ? ['https://embr-existing.westus3.azurecontainerapps.io/'] : [], backendPrefixes: switched || scenario.hasExistingRuntime ? ['/api/'] : [], staticRouting: switched ? { reference: staticReference } : scenario.hasExistingRuntime ? { reference: 'static-assets/app_shop/ver_previous/web/site' } : null, routeMutationFence: switched || scenario.hasExistingRuntime ? { routeEpoch: 24, executionEpoch: switched ? 3 : 2, step: 1 } : null }) }
+      return { title: 'YARP route document', format: 'JSON', body: json({ ownerId: 'app_shop', appLifecycleId: switched || scenario.hasExistingRuntime ? 'alc_31' : null, state: switched || scenario.hasExistingRuntime ? 'assigned' : 'not created', hostnameGeneratedBy: 'SubdomainHelper.ComputeAppSubdomain(appName, appId, routingDomain)', subdomain: switched || scenario.hasExistingRuntime ? demoCustomerHostname : null, appVersionId: switched ? versionId : scenario.oldVersion, vms: switched ? [`https://${candidateFqdn}/`] : scenario.hasExistingRuntime ? ['https://embr-existing.westus3.azurecontainerapps.io/'] : [], backendPrefixes: switched || scenario.hasExistingRuntime ? ['/api/'] : [], staticRouting: switched ? { reference: staticReference } : scenario.hasExistingRuntime ? { reference: 'static-assets/app_shop/ver_previous/web/site' } : null }) }
     case 'customer':
       if (!scenario.hasExistingRuntime && !switched) return { title: 'Generated hostname before route activation', format: 'JSON', body: json({ generatedBy: 'SubdomainHelper.ComputeAppSubdomain', inputs: { appName: 'deployment-explorer-demo', appIdSuffix: 'c25af3b6', routingDomain: 'app.westus2.amahmoud11.embr-test.windows-int.net' }, hostname: demoCustomerHostname, routeState: 'not created yet', reachable: false }) }
       return { title: 'Customer route response', format: 'HTTP', body: `GET ${demoCustomerUrl}/api/health\n\nHTTP/1.1 200 OK\nX-Embr-App-Version: ${switched ? versionId : scenario.oldVersion}` }

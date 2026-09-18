@@ -98,7 +98,7 @@ const machineSize: Partial<Record<NodeId, { width: number; height: number }>> = 
 type RouteTarget = 'none' | 'existing' | 'candidate'
 
 function getRouteTarget(cutover: CutoverState, scenario: Scenario): RouteTarget {
-  if (['switched', 'verified', 'active', 'draining', 'deleting', 'deleted'].includes(cutover)) {
+  if (['switched', 'verified', 'active', 'cleanupPending', 'deleting', 'deleted'].includes(cutover)) {
     return 'candidate'
   }
 
@@ -146,7 +146,9 @@ function providerState(cutover: CutoverState, scenario: Scenario) {
   if (!scenario.hasExistingRuntime) {
     switch (cutover) {
       case 'candidate':
-        return { old: 'No provider', next: `Isolated - ${next}`, oldTone: 'empty', nextTone: 'idle', target: 'No backend assigned', note: `${next} exists in isolation; the customer route is still unassigned.` }
+        return { old: 'No provider', next: `Starting - ${next}`, oldTone: 'empty', nextTone: 'idle', target: 'No backend assigned', note: `${next} is isolated while ADC checks its configured replicas and containers.` }
+      case 'nativeReady':
+        return { old: 'No provider', next: `Native ready - ${next}`, oldTone: 'empty', nextTone: 'ready', target: 'No backend assigned', note: `${next} passed ADC readiness. Direct HTTPS still has to return one exact HTTP 200.` }
       case 'healthy':
         return { old: 'No provider', next: `Healthy - ${next}`, oldTone: 'empty', nextTone: 'ready', target: 'No backend assigned', note: `${next} passed direct health and can now become the first YARP backend.` }
       case 'switched':
@@ -154,7 +156,7 @@ function providerState(cutover: CutoverState, scenario: Scenario) {
       case 'verified':
         return { old: 'No predecessor', next: `Verified - ${next}`, oldTone: 'empty', nextTone: 'serving', target: `${next} verified`, note: `The customer URL returned ${next}; there is no predecessor to retain.` }
       case 'active':
-        return { old: 'No predecessor', next: `Active - ${next}`, oldTone: 'empty', nextTone: 'serving', target: `${next} is active`, note: 'The first Deployment is active. No drain or deletion phase is required.' }
+        return { old: 'No predecessor', next: `Active - ${next}`, oldTone: 'empty', nextTone: 'serving', target: `${next} is active`, note: 'The Deployment has succeeded. Background retention cleanup is independent; there is no predecessor to delete.' }
       default:
         return { old: 'No provider', next: `Not created - ${next}`, oldTone: 'empty', nextTone: 'idle', target: 'No backend assigned', note: 'The Builder App exists, but no Artifact App or YARP backend exists yet.' }
     }
@@ -162,17 +164,19 @@ function providerState(cutover: CutoverState, scenario: Scenario) {
 
   switch (cutover) {
     case 'candidate':
-      return { old: `Serving 100% - ${old}`, next: `Isolated - ${next}`, oldTone: 'serving', nextTone: 'idle', target: `${old} stays live`, note: `${next} exists but receives no customer traffic.` }
+      return { old: `Serving 100% - ${old}`, next: `Starting - ${next}`, oldTone: 'serving', nextTone: 'idle', target: `${old} stays live`, note: `${next} receives no customer traffic while ADC checks replica and container readiness.` }
+    case 'nativeReady':
+      return { old: `Serving 100% - ${old}`, next: `Native ready 0% - ${next}`, oldTone: 'serving', nextTone: 'ready', target: `${old} stays live`, note: `${next} passed ADC readiness. Its direct HTTPS endpoint must still return one exact HTTP 200.` }
     case 'healthy':
       return { old: `Serving 100% - ${old}`, next: `Healthy 0% - ${next}`, oldTone: 'serving', nextTone: 'ready', target: `${old} stays live`, note: `${next} passed direct health and is ready for activation.` }
     case 'switched':
-      return { old: `Retained - ${old}`, next: `Serving 100% - ${next}`, oldTone: 'draining', nextTone: 'serving', target: `YARP targets ${next}`, note: `${old} remains available until public verification succeeds.` }
+      return { old: `Unrouted - ${old}`, next: `Serving 100% - ${next}`, oldTone: 'pending', nextTone: 'serving', target: `YARP targets ${next}`, note: `${old} is retained while Embr verifies the customer URL, but YARP no longer sends it traffic.` }
     case 'verified':
-      return { old: `Retained - ${old}`, next: `Verified 100% - ${next}`, oldTone: 'draining', nextTone: 'serving', target: `${next} verified`, note: `The customer URL returned ${next}; ${old} is still the rollback safety net.` }
-    case 'draining':
-      return { old: `Draining 5 min - ${old}`, next: `Active 100% - ${next}`, oldTone: 'draining', nextTone: 'serving', target: `${next} is active`, note: `${old} remains through the route convergence and connection-drain grace period.` }
+      return { old: `Unrouted - ${old}`, next: `Verified 100% - ${next}`, oldTone: 'pending', nextTone: 'serving', target: `${next} verified`, note: `The customer URL returned ${next}. Promotion can now complete; ${old} remains unrouted.` }
+    case 'cleanupPending':
+      return { old: `Cleanup pending - ${old}`, next: `Active 100% - ${next}`, oldTone: 'pending', nextTone: 'serving', target: `${next} is active`, note: 'The Deployment has already succeeded. A background reconciler will delete the previous provider and apply retention.' }
     case 'deleting':
-      return { old: `Deleting - ${old}`, next: `Active 100% - ${next}`, oldTone: 'deleting', nextTone: 'serving', target: `${next} is active`, note: `The grace deadline passed. Embr is deleting the old Artifact App and ADC Artifact.` }
+      return { old: `Deleting - ${old}`, next: `Active 100% - ${next}`, oldTone: 'deleting', nextTone: 'serving', target: `${next} is active`, note: 'The background reconciler is deleting the previous Artifact App and applying artifact retention.' }
     case 'deleted':
       return { old: `Deleted - ${old}`, next: `Active 100% - ${next}`, oldTone: 'deleted', nextTone: 'serving', target: `${next} is active`, note: `${old} is gone. Only the active provider remains.` }
     default:
@@ -208,18 +212,16 @@ function NodeButton({
   const dimmed = Boolean(step && !active && !context && !selected)
   const provider = providerState(cutover, scenario)
   const completedIds = new Set(scenario.steps.slice(0, completedCount).map((item) => item.id))
-  const retainedVersion = scenario.id === 'redeploy' || scenario.id === 'rollback'
+  const retainedVersion = scenario.id === 'redeploy'
   const versionCreated = retainedVersion || completedIds.has('create-version')
   const deploymentCreated = completedIds.has('create-deployment')
     || [...completedIds].some((item) => item.endsWith('-create-deployment'))
   const versionBuilding = retainedVersion || completedIds.has('start-version-build')
   const versionReady = retainedVersion || completedIds.has('finish-version-build')
-  const deploymentComplete = completedCount >= scenario.steps.length
-  const deploymentStatus = deploymentComplete
+  const deploymentSucceeded = completedIds.has('promote-runtime') || completedIds.has('redeploy-promote')
+  const deploymentStatus = deploymentSucceeded
     ? { text: 'Succeeded', tone: 'serving' }
-    : cutover === 'draining' || cutover === 'deleting'
-      ? { text: 'Cleaning up', tone: 'draining' }
-      : ['switched', 'verified', 'active'].includes(cutover)
+    : ['switched', 'verified', 'active'].includes(cutover)
         ? { text: 'Activating', tone: 'existing' }
         : versionReady
           ? { text: 'Provisioning', tone: 'ready' }
@@ -235,17 +237,15 @@ function NodeButton({
           ? { text: 'Building', tone: 'building' }
         : versionCreated
           ? { text: 'Pending', tone: 'ready' }
-          : deploymentCreated
-            ? { text: 'ID reserved', tone: 'reserved' }
           : { text: 'Not created', tone: 'idle' }
       : id === 'deployment'
         ? deploymentCreated
           ? deploymentStatus
           : { text: 'Not created', tone: 'idle' }
         : id === 'customer'
-          ? !scenario.hasExistingRuntime && !['switched', 'verified', 'active'].includes(cutover)
+          ? !scenario.hasExistingRuntime && !['switched', 'verified', 'active', 'cleanupPending', 'deleting', 'deleted'].includes(cutover)
             ? { text: 'No route yet', tone: 'idle' }
-            : cutover === 'verified' || cutover === 'active' || cutover === 'draining'
+            : ['verified', 'active', 'cleanupPending', 'deleting', 'deleted'].includes(cutover)
               ? { text: 'Public route verified', tone: 'serving' }
               : { text: scenario.hasExistingRuntime ? 'Stable app URL' : 'Route created', tone: 'existing' }
         : undefined
@@ -340,27 +340,47 @@ export function SystemStage({
   const backendRoute = routeTarget === 'none' ? null : transferGeometry('route', routeTarget, stageWidth)
   const routePoint = point('route', stageWidth)
   const candidatePoint = point('candidate', stageWidth)
-  const candidateExists = ['candidate', 'healthy', 'switched', 'verified', 'active', 'draining', 'deleting', 'deleted'].includes(cutover)
-  const candidateHealthy = ['healthy', 'switched', 'verified', 'active', 'draining', 'deleting', 'deleted'].includes(cutover)
+  const candidateExists = ['candidate', 'nativeReady', 'healthy', 'switched', 'verified', 'active', 'cleanupPending', 'deleting', 'deleted'].includes(cutover)
+  const candidateNativeReady = ['nativeReady', 'healthy', 'switched', 'verified', 'active', 'cleanupPending', 'deleting', 'deleted'].includes(cutover)
+  const candidateHealthy = ['healthy', 'switched', 'verified', 'active', 'cleanupPending', 'deleting', 'deleted'].includes(cutover)
+  const nativeReadinessStepActive = step?.id === 'create-candidate' || step?.id === 'redeploy-candidate'
   const healthStepActive = step?.id === 'direct-health' || step?.id.endsWith('-health')
-  const healthState = candidateHealthy
+  const nativeReadinessState = candidateNativeReady
+    ? 'passed'
+    : nativeReadinessStepActive && isAnimating
+      ? 'checking'
+      : candidateExists
+        ? 'next'
+        : 'absent'
+  const directHealthState = candidateHealthy
     ? 'passed'
     : healthStepActive && isAnimating
       ? 'probing'
-      : candidateExists
+      : candidateNativeReady
         ? healthStepActive
           ? 'next'
           : 'waiting'
-        : 'absent'
-  const healthResult = healthState === 'passed'
-    ? 'Passed · 2 × HTTP 200'
-    : healthState === 'probing'
+        : candidateExists
+          ? 'blocked'
+          : 'absent'
+  const nativeReadinessResult = nativeReadinessState === 'passed'
+    ? 'Passed · all replicas ready'
+    : nativeReadinessState === 'checking'
+      ? 'Checking replicas and containers'
+      : nativeReadinessState === 'next'
+        ? 'Next · wait for ADC readiness'
+        : 'Waiting for candidate'
+  const directHealthResult = directHealthState === 'passed'
+    ? 'Passed · one HTTP 200'
+    : directHealthState === 'probing'
       ? 'Probing candidate FQDN'
-      : healthState === 'next'
+      : directHealthState === 'next'
         ? 'Next · direct candidate probe'
-        : healthState === 'waiting'
+        : directHealthState === 'waiting'
           ? 'Waiting for direct probe'
-          : 'Waiting for candidate'
+          : directHealthState === 'blocked'
+            ? 'Blocked by native readiness'
+            : 'Waiting for candidate'
   const sourceLabel = step
     ? getNodeLabel(nodes.find((node) => node.id === step.source) ?? nodes[0], scenario)
     : null
@@ -505,15 +525,22 @@ export function SystemStage({
           ))}
 
           <div
-            className={`candidate-health-gate state-${healthState}`}
-            style={{ left: candidatePoint.x - 82 }}
-            data-health-state={healthState}
+            className={`candidate-health-gate state-${directHealthState}`}
+            style={{ left: candidatePoint.x - 96 }}
+            data-native-readiness-state={nativeReadinessState}
+            data-health-state={directHealthState}
             aria-live="polite"
           >
             <span className="health-gate-icon" aria-hidden="true"><HeartPulse size={17} /></span>
-            <div>
-              <span>Direct health gate</span>
-              <strong>{healthResult}</strong>
+            <div className="health-gate-checks">
+              <div className={`health-gate-check state-${nativeReadinessState}`}>
+                <span>1 · ADC native readiness</span>
+                <strong>{nativeReadinessResult}</strong>
+              </div>
+              <div className={`health-gate-check state-${directHealthState}`}>
+                <span>2 · Direct HTTPS health</span>
+                <strong>{directHealthResult}</strong>
+              </div>
             </div>
           </div>
 

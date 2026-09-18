@@ -1,7 +1,11 @@
 # Builder App Deployment Explorer
 
 Interactive React visualization of the Embr Builder App deployment lifecycle. It covers manual
-deploy, signed GitHub push, retained-version redeploy, and rollback.
+first deploy, deploy-latest replacement, and retained-version redeploy.
+
+The sequence distinguishes AppVersion creation from the durable deployment operation, ADC native
+readiness from direct HTTPS health, atomic YARP activation from public-route verification, and
+deployment success from independently retried post-deployment cleanup.
 
 ## Local development
 
