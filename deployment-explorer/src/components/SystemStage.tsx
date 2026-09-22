@@ -212,17 +212,23 @@ function NodeButton({
   const dimmed = Boolean(step && !active && !context && !selected)
   const provider = providerState(cutover, scenario)
   const completedIds = new Set(scenario.steps.slice(0, completedCount).map((item) => item.id))
-  const retainedVersion = scenario.id === 'redeploy'
+  const retainedVersion = scenario.id === 'commit' || scenario.id === 'redeploy' || scenario.id === 'activate'
   const versionCreated = retainedVersion || completedIds.has('create-version')
   const deploymentCreated = completedIds.has('create-deployment')
     || [...completedIds].some((item) => item.endsWith('-create-deployment'))
   const versionBuilding = retainedVersion || completedIds.has('start-version-build')
   const versionReady = retainedVersion || completedIds.has('finish-version-build')
-  const deploymentSucceeded = completedIds.has('promote-runtime') || completedIds.has('redeploy-promote')
+  const activationPending = scenario.id === 'activate'
+    && deploymentCreated
+    && !completedIds.has('activate-prepare')
+  const deploymentSucceeded = completedIds.has('promote-runtime')
+    || [...completedIds].some((item) => item.endsWith('-promote'))
   const deploymentStatus = deploymentSucceeded
     ? { text: 'Succeeded', tone: 'serving' }
     : ['switched', 'verified', 'active'].includes(cutover)
         ? { text: 'Activating', tone: 'existing' }
+        : activationPending
+          ? { text: 'Pending', tone: 'pending' }
         : versionReady
           ? { text: 'Provisioning', tone: 'ready' }
           : versionBuilding
@@ -343,7 +349,7 @@ export function SystemStage({
   const candidateExists = ['candidate', 'nativeReady', 'healthy', 'switched', 'verified', 'active', 'cleanupPending', 'deleting', 'deleted'].includes(cutover)
   const candidateNativeReady = ['nativeReady', 'healthy', 'switched', 'verified', 'active', 'cleanupPending', 'deleting', 'deleted'].includes(cutover)
   const candidateHealthy = ['healthy', 'switched', 'verified', 'active', 'cleanupPending', 'deleting', 'deleted'].includes(cutover)
-  const nativeReadinessStepActive = step?.id === 'create-candidate' || step?.id === 'redeploy-candidate'
+  const nativeReadinessStepActive = step?.id === 'create-candidate' || step?.id.endsWith('-candidate')
   const healthStepActive = step?.id === 'direct-health' || step?.id.endsWith('-health')
   const nativeReadinessState = candidateNativeReady
     ? 'passed'
@@ -426,7 +432,8 @@ export function SystemStage({
       <div className="starting-state" aria-label="State before this deployment">
         <span>Before this flow</span>
         <strong>Builder App already exists</strong>
-        <i>GitHub source configured</i>
+        <i>GitHub source configured + authorized</i>
+        <i>Easy Auth optional · BYO Entra</i>
         <i>{scenario.hasExistingRuntime ? `${scenario.oldVersion} currently active` : 'No active AppVersion'}</i>
         {!scenario.hasExistingRuntime ? <i>No YARP backend assigned</i> : null}
       </div>

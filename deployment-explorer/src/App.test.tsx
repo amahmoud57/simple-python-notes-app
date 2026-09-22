@@ -19,6 +19,8 @@ describe('Deployment Explorer', () => {
     expect(container.querySelector('.transfer-route')).toHaveTextContent('Builder CLI')
     expect(container.querySelector('.transfer-route')).toHaveTextContent('ARM API')
     expect(screen.getByText('Builder App already exists')).toBeInTheDocument()
+    expect(screen.getByText('GitHub source configured + authorized')).toBeInTheDocument()
+    expect(screen.getByText('Easy Auth optional · BYO Entra')).toBeInTheDocument()
     expect(screen.getByText('No active AppVersion')).toBeInTheDocument()
     expect(screen.getByText('No YARP backend assigned')).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: 'First deploy' })).toHaveAttribute('aria-selected', 'true')
@@ -50,7 +52,7 @@ describe('Deployment Explorer', () => {
     expect(screen.getByRole('heading', { name: 'AppVersion' })).toBeInTheDocument()
     expect(screen.getByText('AppVersion before creation')).toBeInTheDocument()
     expect(screen.getByText(/not created yet/)).toBeInTheDocument()
-    expect(screen.getByText('API boundary').parentElement).toHaveTextContent('ARM API')
+    expect(screen.getByText('Current step API').parentElement).toHaveTextContent('ARM API')
 
     fireEvent.click(screen.getByRole('tab', { name: 'API' }))
     expect(screen.getByText(/CreatePendingFromReferenceAsync/)).toBeInTheDocument()
@@ -107,6 +109,31 @@ describe('Deployment Explorer', () => {
     expect(screen.queryByText('Resolve main to an exact commit')).not.toBeInTheDocument()
     expect(screen.getByText('Select a reusable ready AppVersion')).toBeInTheDocument()
     expect(screen.queryByRole('tab', { name: 'Rollback' })).not.toBeInTheDocument()
+  })
+
+  it('shows exact-commit deploy and explicit version activation as distinct actions', () => {
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Deploy commit' }))
+    expect(screen.getByRole('heading', { name: 'Request deployment of one exact commit' })).toBeInTheDocument()
+    expect(screen.getByText('Find an exact ready AppVersion match')).toBeInTheDocument()
+    const commitScenario = getScenario('commit')
+    const selectionIndex = commitScenario.steps.findIndex((step) => step.id === 'commit-select-version')
+    fireEvent.click(screen.getByRole('button', { name: `Go to step ${selectionIndex + 1}: Find an exact ready AppVersion match` }))
+    expect(screen.getByText(/same lifecycle, source identity, root directory, commit/)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Activate version' }))
+    expect(screen.getByRole('heading', { name: 'Request one frozen AppVersion explicitly' })).toBeInTheDocument()
+    expect(screen.getByText('Validate the selected retained AppVersion')).toBeInTheDocument()
+    expect(screen.queryByText('Revalidate the persisted GitHub source authorization')).not.toBeInTheDocument()
+
+    const scenario = getScenario('activate')
+    const prepareIndex = scenario.steps.findIndex((step) => step.id === 'activate-prepare')
+    fireEvent.click(screen.getByRole('button', { name: `Go to step ${prepareIndex + 1}: Prepare the retained version for fresh runtime resources` }))
+    expect(screen.getByRole('button', { name: 'Inspect Deployment operation' })).toHaveTextContent('Pending')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next step' }))
+    expect(screen.getByRole('button', { name: 'Inspect Deployment operation' })).toHaveTextContent('Provisioning')
   })
 
   it('creates or switches one YARP backend route after the candidate passes health', () => {

@@ -349,10 +349,12 @@
   .brand h1 { font-size: 20px; }
   .command-bar { display: block; padding: 9px 12px; }
   .scenario-title { margin-bottom: 9px; }
+  .scenario-title strong { overflow: visible; text-overflow: clip; white-space: normal; line-height: 1.15; }
   .playback-controls { overflow-x: auto; }
   .workspace { display: block; height: auto; min-height: 0; }
-  .step-rail { height: auto; max-height: 260px; border-right: 0; border-bottom: 1px solid var(--line-strong); }
+  .step-rail { height: auto; max-height: 310px; border-right: 0; border-bottom: 1px solid var(--line-strong); }
   .scenario-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .scenario-list button span { overflow: visible; text-overflow: clip; white-space: normal; line-height: 1.15; }
   .step-list { max-height: 150px; }
   .stage-panel { min-height: 850px; }
   .active-step { grid-template-columns: 58px minmax(0,1fr); }

@@ -48,9 +48,16 @@ describe('deployment model', () => {
     expect(getNodeApi('regional')).toContain('PRIVATE NON-ARM SERVICE API')
     expect(getNodeApi('regional')).toContain('ClusterIP only')
     expect(getNodeApi('regional')).toContain('workload identity token + mTLS')
-    expect(getNodeApi('regional')).toContain('TriggerAsync (admit, resolve, persist + signal)')
+    expect(getNodeApi('regional')).toContain('TriggerAsync | TriggerRedeployAsync | ActivateVersionAsync')
+    expect(getNodeApi('regional')).toContain('admit, resolve/select AppVersion, persist + signal')
     expect(getNodeApi('regional')).toContain('ResumeAsync (claim + execute)')
     expect(getNodeApi('regional')).toContain('AppPostDeploymentCleanupReconciler')
+    for (const scenario of scenarios) {
+      const armSteps = scenario.steps.filter((step) => step.executionSurface === 'armApi' && step.source === 'client')
+      for (const step of armSteps) {
+        if (step.api.includes('api-version=')) expect(step.api).toContain('2026-08-01-preview')
+      }
+    }
   })
 
   it('explains the AppVersion ready gate as concrete build and runtime settings', () => {
@@ -215,7 +222,8 @@ describe('deployment model', () => {
     expect(readyIndex).toBeLessThan(provisionIndex)
 
     const initialApp = getNodeExample('app', scenario, 0, 'empty').body
-    expect(initialApp).toContain('"sourceIntegrationState": "Configured"')
+    expect(initialApp).toContain('"authorization"')
+    expect(initialApp).toContain('"providerSubjectId": "github-user-842"')
     expect(initialApp).toContain('"pendingDeploymentId": null')
 
     const reservedApp = getNodeExample('app', scenario, reserveIndex + 1, 'empty').body
@@ -240,6 +248,8 @@ describe('deployment model', () => {
     expect(operationStep?.title).toBe('Persist the operation for the new AppVersion')
     expect(operationStep?.source).toBe('version')
     expect(operationStep?.reason).toContain('The AppVersion now exists')
+    expect(operationStep?.reason).toContain('immutable version configuration')
+    expect(operationStep?.reason).not.toMatch(/linked services|current settings/i)
     expect(operationStep?.result).toContain('appVersionId: ver_demo')
   })
 
@@ -253,16 +263,54 @@ describe('deployment model', () => {
     expect(`${identityStep?.title} ${identityStep?.payload}`).not.toMatch(/\bcaller\b/i)
 
     const request = getNodeExample('regional', scenario, 2, 'empty').body
-    expect(request).toContain('"armCaller"')
-    expect(request).toContain('"tenantId": "72f988bf-86f1-41af-91ab-2d7cd011db47"')
-    expect(request).toContain('"objectId": "093b6f15-6e26-4906-b372-10c4fe0c3eb0"')
+    expect(request).toContain('"armTenantId": "72f988bf-86f1-41af-91ab-2d7cd011db47"')
+    expect(request).toContain('"armObjectId": "093b6f15-6e26-4906-b372-10c4fe0c3eb0"')
   })
 
   it('keeps retained-version flows free of GitHub and build sandbox steps', () => {
-    const scenario = getScenario('redeploy')
-    expect(scenario.steps.some((step) => step.source === 'github' || step.target === 'github')).toBe(false)
-    expect(scenario.steps.some((step) => step.source === 'build' || step.target === 'build')).toBe(false)
+    for (const id of ['redeploy', 'activate'] as const) {
+      const scenario = getScenario(id)
+      expect(scenario.steps.some((step) => step.source === 'github' || step.target === 'github')).toBe(false)
+      expect(scenario.steps.some((step) => step.source === 'build' || step.target === 'build')).toBe(false)
+    }
     expect(scenarios.map((item) => item.id)).not.toContain('rollback')
+  })
+
+  it('models exact-commit deploy as retained-match reuse with a build fallback', () => {
+    const scenario = getScenario('commit')
+    const request = scenario.steps.find((step) => step.id === 'commit-request')
+    const selection = scenario.steps.find((step) => step.id === 'commit-select-version')
+    const operation = scenario.steps.find((step) => step.id === 'commit-create-deployment')
+
+    expect(request?.payload).toContain('commitSha')
+    expect(request?.api).toContain('--commit')
+    expect(scenario.steps.some((step) => step.target === 'github')).toBe(true)
+    expect(scenario.steps.some((step) => step.source === 'build' || step.target === 'build')).toBe(false)
+    expect(selection?.reason).toContain('same lifecycle, source identity, root directory, commit, and complete desired version configuration')
+    expect(selection?.reason).toContain('If no match exists')
+    expect(operation?.result).toContain('action: deploy')
+    expect(operation?.result).toContain('sourceRevision')
+    expect(operation?.phase).toBe('provisioning')
+    expect(getNodeExample('version', scenario, 0, 'existing').body).toContain('71ab42d9c5086a1af62db578c2bd0b2a47f918cd')
+    expect(getNodeExample('route', scenario, 0, 'existing').body).toContain('"appVersionId": "ver_17"')
+    expect(getNodeExample('app', scenario, 0, 'existing').body).toContain('"activeAppVersionId": "ver_17"')
+  })
+
+  it('models explicit AppVersion activation as a distinct no-build action', () => {
+    const scenario = getScenario('activate')
+    const request = scenario.steps.find((step) => step.id === 'activate-request')
+    const validation = scenario.steps.find((step) => step.id === 'activate-validate-version')
+    const operation = scenario.steps.find((step) => step.id === 'activate-create-deployment')
+    const prepared = scenario.steps.find((step) => step.id === 'activate-prepare')
+
+    expect(request?.payload).toContain('/versions/ver_16/activate')
+    expect(request?.api).toContain('version activate')
+    expect(validation?.reason).toContain('current app lifecycle')
+    expect(validation?.reason).toContain('retention window')
+    expect(validation?.reason).toContain('output-availability')
+    expect(operation?.result).toContain('action: activate')
+    expect(operation?.phase).toBe('pending')
+    expect(prepared?.result).toContain('no source resolution or build operation')
   })
 
   it('marks deployment success before independently retried cleanup', () => {
@@ -274,19 +322,23 @@ describe('deployment model', () => {
     expect(promoted).toContain('"status": "succeeded"')
     expect(promoted).toContain('"postDeploymentCleanupStatus": "pending"')
     expect(cleanup?.phase).toBe('postCleanup')
+    expect(cleanup?.reason).toContain('claims app admission')
     expect(cleanup?.reason).toContain('active AppVersion plus five distinct successful historical AppVersions')
 
     const cleaned = getNodeExample('deployment', scenario, scenario.steps.length, 'deleted').body
     expect(cleaned).toContain('"postDeploymentCleanupStatus": "completed"')
   })
 
-  it('uses lifecycle ownership fields without invented route epoch fields', () => {
+  it('uses persisted route ownership and publisher fields without invented route epochs', () => {
     const scenario = getScenario('latest')
     const route = getNodeExample('route', scenario, scenario.steps.length, 'deleted').body
 
-    expect(route).toContain('"ownerId": "app_shop"')
-    expect(route).toContain('"appLifecycleId": "alc_31"')
+    expect(route).toContain('"projectId": "app_shop"')
+    expect(route).toContain('"appLifecycleId": "ali_31"')
     expect(route).toContain('"appVersionId": "ver_latest"')
+    expect(route).toContain('"appDeploymentId": "adp_latest"')
+    expect(getNodeApi('route')).toContain('appDeploymentId')
+    expect(getNodeApi('route')).toContain('not an epoch fence')
     expect(route).not.toContain('routeMutationFence')
     expect(route).not.toContain('routeEpoch')
     expect(route).not.toContain('executionEpoch')
@@ -298,5 +350,47 @@ describe('deployment model', () => {
       expect(verificationStep?.reason).toContain('Required')
       expect(verificationStep?.reason).toContain('skip')
     }
+  })
+
+  it('freezes desired version configuration into AppVersion and Deployment records', () => {
+    const scenario = getScenario('latest')
+    const app = getNodeExample('app', scenario, 0, 'existing').body
+    const version = getNodeExample('version', scenario, scenario.steps.length, 'deleted').body
+    const deployment = getNodeExample('deployment', scenario, scenario.steps.length, 'deleted').body
+
+    expect(app).toContain('"versionConfiguration"')
+    expect(version).toContain('"configuration"')
+    expect(deployment).toContain('"configuration"')
+    expect(version).toContain('"appLifecycleId": "ali_31"')
+    expect(app).toContain('"lifecycleId": "ali_31"')
+    expect(`${app}${version}`).not.toContain('alc_')
+    expect(getNodeApi('app')).toContain('captured by the next AppVersion')
+  })
+
+  it('shows current source authorization and BYO Entra route auth without scope or role requirements', () => {
+    const scenario = getScenario('latest')
+    const app = getNodeExample('app', scenario, 0, 'existing').body
+    const route = getNodeExample('route', scenario, scenario.steps.length, 'deleted').body
+
+    expect(app).toContain('"authorization"')
+    expect(getNodeApi('app')).toContain('authorizationToken or transient repositoryToken')
+    expect(getNodeApi('app')).toContain('Deploy always revalidates')
+    expect(route).toContain('"applicationMode": "customer"')
+    expect(route).toContain('"signInMode": "organizations"')
+    expect(route).toContain('"workloadIdentityResourceId"')
+    expect(route).toContain('"allowedAudiences"')
+    expect(route).not.toContain('requiredScopes')
+    expect(route).not.toContain('requiredRoles')
+  })
+
+  it('shows cleanup reacquiring app admission after deployment success', () => {
+    const scenario = getScenario('latest')
+    const cleaning = getNodeExample('app', scenario, scenario.steps.length - 1, 'deleting').body
+    const cleaned = getNodeExample('app', scenario, scenario.steps.length, 'deleted').body
+
+    expect(cleaning).toContain('"pendingDeploymentId": "adp_latest"')
+    expect(cleaning).toContain('"pendingDeploymentCleanupEpoch": 4')
+    expect(cleaned).toContain('"pendingDeploymentId": null')
+    expect(cleaned).not.toContain('pendingDeploymentCleanupEpoch')
   })
 })

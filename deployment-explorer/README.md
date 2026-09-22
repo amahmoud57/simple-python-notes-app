@@ -1,11 +1,13 @@
 # Builder App Deployment Explorer
 
 Interactive React visualization of the Embr Builder App deployment lifecycle. It covers manual
-first deploy, deploy-latest replacement, and retained-version redeploy.
+first deploy, deploy-latest replacement, exact-commit deployment, retained-version redeploy, and
+explicit AppVersion activation.
 
-The sequence distinguishes AppVersion creation from the durable deployment operation, ADC native
-readiness from direct HTTPS health, atomic YARP activation from public-route verification, and
-deployment success from independently retried post-deployment cleanup.
+The sequence distinguishes desired version configuration from its immutable AppVersion snapshot,
+source authorization from customer-facing Easy Auth, AppVersion creation from the durable
+Deployment, ADC native readiness from direct HTTPS health, atomic YARP activation from public-route
+verification, and deployment success from serialized, independently retried cleanup.
 
 ## Local development
 

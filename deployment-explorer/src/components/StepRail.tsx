@@ -1,4 +1,4 @@
-import { Check, Circle, GitBranch, RefreshCw, Rocket } from 'lucide-react'
+import { Check, Circle, GitBranch, GitCommitHorizontal, PackageCheck, RefreshCw, Rocket } from 'lucide-react'
 import { phaseLabels, type Scenario } from '../model'
 
 interface StepRailProps {
@@ -12,7 +12,9 @@ interface StepRailProps {
 const scenarioIcons = {
   manual: Rocket,
   latest: GitBranch,
+  commit: GitCommitHorizontal,
   redeploy: RefreshCw,
+  activate: PackageCheck,
 }
 
 export function StepRail({ scenarios, scenario, completedCount, onScenarioChange, onStepSelect }: StepRailProps) {

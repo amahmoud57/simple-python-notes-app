@@ -47,7 +47,7 @@ export function DetailDrawer({
       <dl className="detail-facts">
         <div><dt>Role</dt><dd>{node.eyebrow}</dd></div>
         <div><dt>Flow state</dt><dd>{completedCount === scenario.steps.length ? 'Deployment complete' : `${completedCount} of ${scenario.steps.length} steps complete`}</dd></div>
-        <div><dt>API boundary</dt><dd>{currentStep ? executionSurfaceLabels[currentStep.executionSurface] : 'No active call'}</dd></div>
+        <div><dt>Current step API</dt><dd>{currentStep ? executionSurfaceLabels[currentStep.executionSurface] : 'No active call'}</dd></div>
       </dl>
 
       <div className="detail-tabs" role="tablist" aria-label="Component detail view">
