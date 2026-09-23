@@ -1,80 +1,65 @@
+import { useEffect, useRef, type CSSProperties } from 'react'
 import {
   ArrowRight,
-  Box,
   Check,
-  Circle,
   CircleCheck,
   Container,
+  Database,
   Files,
   GitBranch,
   GitCommitHorizontal,
   Globe,
-  Layers,
+  Hammer,
   PackageCheck,
+  PackageOpen,
   RefreshCw,
   Rocket,
+  Route,
+  Server,
   ShieldCheck,
+  Trash2,
   Users,
 } from 'lucide-react'
 import { scenarios, type Scenario } from '../model'
 import { getOverviewState, overviewStories } from '../overview'
 import './Overview.css'
 
-const scenarioIcons = {
-  manual: Rocket,
-  latest: GitBranch,
-  commit: GitCommitHorizontal,
-  redeploy: RefreshCw,
-  activate: PackageCheck,
-}
-
-const capabilities = [
-  { icon: Layers, title: 'Static + OCI outputs', detail: 'Static assets in Blob Storage; compute images in Azure Container Registry.' },
-  { icon: GitCommitHorizontal, title: 'Immutable AppVersions', detail: 'Pinned source, component manifest, configuration, and reusable build outputs.' },
-  { icon: ShieldCheck, title: 'ADC Artifact Apps', detail: 'Fresh compute runtime per deployment, gated on readiness and HTTPS health.' },
-  { icon: PackageCheck, title: 'Retained-version recovery', detail: 'Reuse saved assets and OCI images to create a fresh Artifact App without rebuilding.' },
-]
+const scenarioIcons = { manual: Rocket, latest: GitBranch, commit: GitCommitHorizontal, redeploy: RefreshCw, activate: PackageCheck }
+const stationIcons = { select: GitBranch, build: Hammer, publish: Container, artifact: PackageOpen, candidate: Server, check: ShieldCheck, release: Route, verify: Globe, cleanup: Trash2 }
 
 interface OverviewProps {
   scenario: Scenario
   completedCount: number
   isAnimating: boolean
+  motionDurationMs: number
   onScenarioChange: (scenario: Scenario) => void
   onMilestoneSelect: (index: number) => void
   onTechnicalView: () => void
 }
 
-export function Overview({ scenario, completedCount, isAnimating, onScenarioChange, onMilestoneSelect, onTechnicalView }: OverviewProps) {
+export function Overview({ scenario, completedCount, isAnimating, motionDurationMs, onScenarioChange, onMilestoneSelect, onTechnicalView }: OverviewProps) {
+  const root = useRef<HTMLDivElement>(null)
   const state = getOverviewState(scenario, completedCount)
   const story = overviewStories[scenario.id]
   const builds = scenario.steps.some((step) => step.phase === 'building')
-  const nativeReady = ['nativeReady', 'healthy', 'switched', 'verified', 'active', 'cleanupPending', 'deleting', 'deleted'].includes(state.cutover)
-  const incomingStatus = state.candidateServing
-    ? state.released ? 'Serving customers' : 'Verifying the release'
-    : state.healthy
-      ? 'Healthy, ready for traffic'
-      : state.prepared
-        ? isAnimating ? 'Checking runtime health' : 'Ready for health checks'
-        : completedCount > 0 ? builds ? 'Preparing a new build' : 'Preparing retained outputs' : 'Awaiting selection'
-  const currentStatus = !scenario.hasExistingRuntime
-    ? 'No customer traffic yet'
-    : state.complete ? 'Previous runtime retired' : state.candidateServing ? 'Unrouted, awaiting cleanup' : 'Serving customers'
-  const trafficStatus = state.servingVersion
-    ? `${state.servingVersion} is serving customers${scenario.id === 'redeploy' ? state.candidateServing ? ' on the fresh runtime' : ' on the current runtime' : ''}`
-    : 'No live version yet'
+  const stations = state.milestones.filter((milestone) => milestone.id !== 'cleanup')
+  const cleanup = state.milestones.at(-1)!
+  const assetsStored = !builds || scenario.steps.slice(0, completedCount).some((step) => step.id === 'publish-static')
+  const trafficTarget = state.candidateServing ? 'candidate' : scenario.hasExistingRuntime ? 'existing' : 'none'
+
+  useEffect(() => {
+    if (!isAnimating || !window.matchMedia?.('(max-width: 680px)').matches) return
+    root.current?.querySelector('[aria-current="step"]')?.scrollIntoView({
+      block: 'center',
+      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth',
+    })
+  }, [isAnimating, state.milestone.id])
 
   return (
-    <div id="overview-panel" className="overview" role="tabpanel" aria-labelledby="overview-tab">
+    <div ref={root} id="overview-panel" className="overview" role="tabpanel" aria-labelledby="overview-tab">
       <div className="overview-heading">
-        <div>
-          <p className="overview-eyebrow">Source to production</p>
-          <h2>{story.title}</h2>
-          <p className="overview-summary">{story.summary}</p>
-        </div>
-        <dl className="overview-input">
-          <div><dt>Starting point</dt><dd>{story.source}</dd></div>
-          <div><dt>Build strategy</dt><dd>{builds ? 'Build new outputs' : 'Reuse retained outputs'}</dd></div>
-        </dl>
+        <div><p className="overview-eyebrow">Source to production</p><h2>{story.title}</h2></div>
+        <button type="button" className="overview-detail-link" onClick={onTechnicalView}>Technical detail <ArrowRight size={16} aria-hidden="true" /></button>
       </div>
 
       <div className="overview-scenarios" role="tablist" aria-label="Deployment scenario">
@@ -99,109 +84,76 @@ export function Overview({ scenario, completedCount, isAnimating, onScenarioChan
                 onScenarioChange(scenarios[nextIndex])
                 event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[nextIndex].focus()
               }}
-            >
-              <Icon size={19} aria-hidden="true" />
-              {item.label}
-            </button>
+            ><Icon size={19} aria-hidden="true" />{item.label}</button>
           )
         })}
       </div>
 
       <section id="overview-journey" role="tabpanel" aria-labelledby={`overview-scenario-${scenario.id}`}>
-        <ol className="overview-milestones" aria-label="Release milestones">
-          {state.milestones.map((milestone, index) => {
-            const done = completedCount >= milestone.end
-            const active = !state.complete && index === state.milestoneIndex
-            return (
-              <li key={milestone.id} className={done ? 'is-done' : active ? 'is-active' : ''}>
-                <button
-                  type="button"
-                  onClick={() => onMilestoneSelect(milestone.start)}
-                  aria-label={`Go to stage ${index + 1}: ${milestone.label}`}
-                  aria-current={active ? 'step' : undefined}
-                >
-                  <span className="milestone-number" aria-hidden="true">{done ? <Check size={17} /> : `0${index + 1}`}</span>
-                  <span>{milestone.label}</span>
-                  <span className="sr-only">{done ? 'Completed' : active ? 'Current stage' : 'Upcoming'}</span>
-                </button>
-              </li>
-            )
-          })}
-        </ol>
-
-        <div className={`overview-stage${isAnimating ? ' is-running' : ''}`}>
-          <div className="overview-narrative">
-            <p className="overview-eyebrow">{state.complete ? 'Journey complete' : `Stage 0${state.milestoneIndex + 1} / 05`}</p>
+        <div className="flow-caption" role="status" aria-label="Current stage">
+          <span className="flow-counter">{String(state.milestoneIndex + 1).padStart(2, '0')}<small>/ {String(state.milestones.length).padStart(2, '0')}</small></span>
+          <div>
             <h3>{state.complete ? `${state.newVersion} is live.` : state.milestone.title}</h3>
-            <p className="milestone-description">{state.complete ? state.milestone.result : state.milestone.description}</p>
-            <dl className="milestone-details">
-              {state.milestone.details.map((detail) => (
-                <div key={detail.label}><dt>{detail.label}</dt><dd>{detail.text}</dd></div>
-              ))}
-            </dl>
-            <div className={`release-outcome${state.released ? ' is-live' : ''}`} role="status" aria-label="Release status">
-              {state.released ? <CircleCheck size={21} aria-hidden="true" /> : <ShieldCheck size={21} aria-hidden="true" />}
-              <div>
-                <span>{state.released ? 'Deployment succeeded' : scenario.hasExistingRuntime ? 'Current service' : 'Before first launch'}</span>
-                <strong>{trafficStatus}</strong>
-              </div>
-            </div>
-            <button type="button" className="overview-detail-link" onClick={onTechnicalView}>
-              Technical detail <ArrowRight size={16} aria-hidden="true" />
-            </button>
+            <p>{state.complete ? state.milestone.result : state.milestone.description}</p>
           </div>
+          <span className="flow-payload"><Container size={16} aria-hidden="true" />{state.complete ? 'Release complete' : state.milestone.payload}</span>
+        </div>
 
-          <div className="release-visual" aria-label="Customer traffic and app versions" data-route-target={state.candidateServing ? 'candidate' : scenario.hasExistingRuntime ? 'existing' : 'none'}>
-            <div className="release-visual-heading">
-              <span><Globe size={16} aria-hidden="true" /> One app URL</span>
-              <span className="release-visual-label">Illustrative app</span>
-            </div>
-            <div className="release-outputs" role="group" aria-label="AppVersion outputs">
-              <div><Files size={19} aria-hidden="true" /><div><strong>Static assets</strong><span>Blob Storage</span></div></div>
-              <div><Container size={19} aria-hidden="true" /><div><strong>OCI image</strong><span>Azure Container Registry</span></div></div>
-            </div>
-            <p className="output-routing-note">YARP serves static paths from Blob Storage and routes API traffic to the active Artifact App.</p>
-            <div className="release-diagram">
-              <div className="release-customers">
-                <span className="customer-symbol"><Users size={30} strokeWidth={1.6} aria-hidden="true" /></span>
-                <strong>Customers</strong>
-                <span>{state.servingVersion ? 'API traffic' : 'Not live yet'}</span>
-              </div>
-              <div className={`traffic-fork${state.servingVersion ? ' is-connected' : ''}`} aria-hidden="true">
-                <span className="traffic-trunk" />
-                <span className={`traffic-branch to-current${scenario.hasExistingRuntime && !state.candidateServing ? ' is-serving' : ''}`} />
-                <span className={`traffic-branch to-incoming${state.candidateServing ? ' is-serving' : ''}`} />
-              </div>
-              <div className="release-versions">
-                <article className={`release-version current-version${scenario.hasExistingRuntime && !state.candidateServing ? ' is-serving' : ''}${!scenario.hasExistingRuntime ? ' is-empty' : ''}`}>
-                  <div className="version-heading"><span>{state.candidateServing ? 'Previous Artifact App' : 'Current Artifact App'}</span><Box size={18} aria-hidden="true" /></div>
-                  <strong className="version-name">{state.oldVersion ?? 'No version yet'}</strong>
-                  <span className="version-status">{scenario.hasExistingRuntime && !state.candidateServing ? <CircleCheck size={14} aria-hidden="true" /> : <Circle size={12} aria-hidden="true" />}{currentStatus}</span>
-                </article>
-                <article className={`release-version incoming-version${state.candidateServing ? ' is-serving' : ''}${state.healthy ? ' is-healthy' : ''}`}>
-                  <div className="version-heading"><span>{state.candidateServing ? 'New live Artifact App' : 'Candidate Artifact App'}</span><Layers size={18} aria-hidden="true" /></div>
-                  <strong className="version-name">{state.newVersion}</strong>
-                  <span className="version-status">{state.healthy ? <CircleCheck size={14} aria-hidden="true" /> : <Circle size={12} aria-hidden="true" />}{incomingStatus}</span>
-                </article>
-              </div>
-            </div>
-            <div className="overview-health" aria-label="Candidate health checks">
-              <span className={nativeReady ? 'is-passed' : ''}>{nativeReady ? <CircleCheck size={16} aria-hidden="true" /> : <Circle size={16} aria-hidden="true" />}{nativeReady ? 'Runtime ready' : 'Runtime readiness pending'}</span>
-              <span className={state.healthy ? 'is-passed' : ''}>{state.healthy ? <CircleCheck size={16} aria-hidden="true" /> : <Circle size={16} aria-hidden="true" />}{state.healthy ? 'Endpoint healthy' : 'Endpoint health pending'}</span>
-            </div>
+        <div className={`flow-map${isAnimating ? ' is-running' : ''}`} data-current-stage={state.complete ? 'complete' : state.milestone.id} style={{ '--flow-duration': `${motionDurationMs}ms` } as CSSProperties}>
+          <ol className="flow-track" aria-label="Deployment flow">
+            {stations.map((milestone, index) => {
+              const done = completedCount >= milestone.end
+              const active = !state.complete && index === state.milestoneIndex
+              const Icon = stationIcons[milestone.id]
+              const direction = index === 4 ? 'turn' : index > 4 ? 'reverse' : 'forward'
+              return (
+                <li key={milestone.id} data-station={milestone.id} className={`flow-stop ${done ? 'is-done' : active ? 'is-current' : 'is-upcoming'}`} style={{ '--column': index < 4 ? index + 1 : 8 - index, '--row': index < 4 ? 1 : 2 } as CSSProperties}>
+                  {index > 0 && (
+                    <span className={`flow-connector direction-${direction}`} aria-hidden="true">
+                      {active && isAnimating && <span key={`${milestone.id}-${motionDurationMs}`} className="flow-packet" data-payload={milestone.payload}><Container size={16} /></span>}
+                    </span>
+                  )}
+                  <button type="button" className="flow-station" aria-label={`Go to stage ${index + 1}: ${milestone.label}`} aria-current={active ? 'step' : undefined} onClick={() => onMilestoneSelect(milestone.start)} title={milestone.description}>
+                    <span className="flow-symbol"><Icon size={32} strokeWidth={1.6} aria-hidden="true" /><span className="flow-number" aria-hidden="true">{done ? <Check size={12} /> : index + 1}</span></span>
+                    <strong>{milestone.station}</strong>
+                    <span className="flow-action">{milestone.label}</span>
+                    <span className="flow-state">{done ? <><Check size={12} aria-hidden="true" />{milestone.id === 'check' ? 'Endpoint healthy' : 'Done'}</> : active ? isAnimating ? 'In progress' : 'You are here' : 'Up next'}</span>
+                  </button>
+                </li>
+              )
+            })}
+          </ol>
+          {!builds && <p className="flow-reuse-note"><RefreshCw size={15} aria-hidden="true" />{scenario.id === 'commit' ? 'Exact retained match shown. Otherwise build.' : 'Retained version. Build skipped.'}</p>}
+          <div className={`flow-static-path${assetsStored ? ' outputs-ready' : ''}`} role="group" aria-label="Static asset path" data-assets-stored={assetsStored}>
+            <span><Files size={19} aria-hidden="true" />Static frontend</span>
+            <ArrowRight size={20} aria-hidden="true" />
+            <span><Database size={19} aria-hidden="true" />Blob Storage</span>
+            <ArrowRight size={20} aria-hidden="true" />
+            <span><Route size={19} aria-hidden="true" />YARP static paths</span>
+            <small>{!builds ? 'Retained files' : assetsStored ? 'Files published' : 'Awaiting publish'}</small>
           </div>
         </div>
 
-        <p className="overview-distinction"><span>{scenario.label}</span>{story.distinction}</p>
-      </section>
-
-      <section className="overview-capabilities" aria-labelledby="capabilities-title">
-        <div className="capabilities-heading"><h3 id="capabilities-title">Built into the release</h3><span>Across these deployment flows</span></div>
-        <ul>
-          {capabilities.map(({ icon: Icon, title, detail }) => (
-            <li key={title}><Icon size={22} strokeWidth={1.7} aria-hidden="true" /><div><h4>{title}</h4><p>{detail}</p></div></li>
-          ))}
-        </ul>
+        <div className="release-visual" data-route-target={trafficTarget}>
+          <div className={`customer-traffic${state.servingVersion ? ' is-serving' : ''}`} role="group" aria-label="Customer traffic">
+            <span><Users size={23} aria-hidden="true" />Customers</span>
+            <span className="traffic-wire" aria-hidden="true" />
+            <span><Route size={22} aria-hidden="true" />YARP</span>
+            <span className="traffic-wire" aria-hidden="true" />
+            <span key={trafficTarget} className="traffic-destination"><Server size={25} aria-hidden="true" /><span>{state.servingVersion ? `Artifact App ${state.servingVersion}` : 'No active app'}<small>{state.candidateServing ? 'New runtime' : state.servingVersion ? 'Current runtime' : 'Not live yet'}</small></span></span>
+          </div>
+          <div className="release-outcome" role="status" aria-label="Release status">
+            {state.released ? <CircleCheck size={18} aria-hidden="true" /> : <ShieldCheck size={18} aria-hidden="true" />}
+            <div><strong>{state.released ? 'Deployment succeeded' : state.candidateServing ? 'Verifying release' : scenario.hasExistingRuntime ? 'Current version stays live' : 'Waiting for first release'}</strong><span>{state.servingVersion ? `${state.servingVersion} is serving customers` : 'No live version yet'}</span></div>
+          </div>
+          <button
+            type="button"
+            className={`flow-cleanup${state.milestone.id === 'cleanup' ? ' is-current' : ''}${state.complete ? ' is-done' : ''}`}
+            onClick={() => onMilestoneSelect(cleanup.start)}
+            aria-label={`Go to stage ${state.milestones.length}: After release`}
+            aria-current={!state.complete && state.milestone.id === 'cleanup' ? 'step' : undefined}
+          ><Trash2 size={18} aria-hidden="true" /><span>After release<small>{state.complete ? 'Cleanup complete' : state.released ? 'Background cleanup' : 'Cleanup queued'}</small></span></button>
+        </div>
       </section>
     </div>
   )

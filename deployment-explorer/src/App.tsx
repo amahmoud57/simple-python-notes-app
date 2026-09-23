@@ -239,6 +239,7 @@ function App() {
           scenario={scenario}
           completedCount={completedCount}
           isAnimating={isAnimating}
+          motionDurationMs={motionDurationMs}
           onScenarioChange={selectScenario}
           onMilestoneSelect={selectStep}
           onTechnicalView={() => selectView('technical')}

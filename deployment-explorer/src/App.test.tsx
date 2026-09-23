@@ -14,40 +14,41 @@ afterEach(() => {
 })
 
 describe('Deployment Overview', () => {
-  it('opens with five customer-facing stages and no internal API diagram', () => {
-    render(<App />)
+  it('opens with a visual deployment path and no detail paragraphs or API diagram', () => {
+    const { container } = render(<App />)
     expect(screen.getByRole('main')).toContainElement(screen.getByRole('tabpanel', { name: 'Overview' }))
     expect(screen.getByRole('main')).toContainElement(screen.getByRole('button', { name: 'Next stage' }))
     expect(screen.getByRole('tab', { name: 'Overview' })).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByRole('heading', { name: 'From source to a running app.' })).toBeInTheDocument()
-    expect(screen.getAllByRole('button', { name: /Go to stage/ })).toHaveLength(5)
+    expect(screen.getAllByRole('button', { name: /Go to stage/ })).toHaveLength(9)
+    expect(screen.getByRole('list', { name: 'Deployment flow' })).toBeInTheDocument()
+    expect(container.querySelector('.milestone-details')).not.toBeInTheDocument()
+    expect(container.querySelector('.overview-capabilities')).not.toBeInTheDocument()
     expect(screen.getByRole('status', { name: 'Release status' })).toHaveTextContent('No live version yet')
     expect(screen.queryByRole('button', { name: 'Inspect ARM API' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Previous stage' })).toBeDisabled()
   })
 
-  it.each(scenarios)('adds implementation context to $label without changing the five-stage layout', (scenario) => {
+  it.each(scenarios)('advances $label through the actual registry, artifact, runtime, and route stations', (scenario) => {
     const { container } = render(<App />)
     fireEvent.click(screen.getByRole('tab', { name: scenario.label }))
-    expect(screen.getAllByRole('button', { name: /Go to stage/ })).toHaveLength(5)
-    expect(screen.getByRole('group', { name: 'AppVersion outputs' })).toHaveTextContent('Static assetsBlob Storage')
-    expect(screen.getByRole('group', { name: 'AppVersion outputs' })).toHaveTextContent('OCI imageAzure Container Registry')
-    expect(screen.getByText('Candidate Artifact App')).toBeInTheDocument()
-    expect(screen.getByText(/YARP serves static paths from Blob Storage/)).toBeInTheDocument()
-
-    const prepare = getOverviewMilestones(scenario)[1]
-    fireEvent.click(screen.getByRole('button', { name: `Go to stage 2: ${prepare.label}` }))
-    const details = container.querySelector('.milestone-details')
-    expect(details).toHaveTextContent('OCI image')
-    expect(details).toHaveTextContent('Azure Container Registry')
-    expect(details).toHaveTextContent('ADC Artifact')
-    expect(details).toHaveTextContent(scenario.id === 'manual' || scenario.id === 'latest' ? 'Create an OCI image' : 'Reuse the OCI image')
-
-    fireEvent.click(screen.getByRole('button', { name: 'Next stage' }))
-    expect(container.querySelector('.milestone-description')).toHaveTextContent('ADC Artifact App')
-    expect(details).toHaveTextContent('ADC readiness')
-    expect(details).toHaveTextContent('HTTP 200')
-    expect(container.querySelector('.release-visual')).toHaveAttribute('data-route-target', scenario.hasExistingRuntime ? 'existing' : 'none')
+    const milestones = getOverviewMilestones(scenario)
+    expect(screen.getAllByRole('button', { name: /Go to stage/ })).toHaveLength(milestones.length)
+    expect(screen.getByRole('group', { name: 'Static asset path' })).toHaveTextContent('Blob Storage')
+    expect(container.querySelectorAll('.flow-connector')).toHaveLength(milestones.length - 2)
+    for (const [index, milestone] of milestones.entries()) {
+      const station = screen.getByRole('button', { name: `Go to stage ${index + 1}: ${milestone.label}` })
+      expect(station).toHaveAttribute('aria-current', 'step')
+      expect(screen.getByRole('status', { name: 'Current stage' })).toHaveTextContent(milestone.title)
+      expect(container.querySelector('.flow-map')).toHaveAttribute('data-current-stage', milestone.id)
+      fireEvent.click(screen.getByRole('button', { name: 'Next stage' }))
+    }
+    if (scenario.id === 'manual' || scenario.id === 'latest') {
+      expect(container.querySelector('[data-station="build"]')).toBeInTheDocument()
+    } else {
+      expect(container.querySelector('[data-station="build"]')).not.toBeInTheDocument()
+      expect(container.querySelector('.flow-reuse-note')).toBeInTheDocument()
+    }
   })
 
   it.each(scenarios)('shows $label health, serving traffic, and cleanup in the right order', (scenario) => {
@@ -56,15 +57,19 @@ describe('Deployment Overview', () => {
     fireEvent.click(screen.getByRole('tab', { name: scenario.label }))
     const next = screen.getByRole('button', { name: 'Next stage' })
     const release = screen.getByRole('status', { name: 'Release status' })
-    for (let index = 0; index < 3; index += 1) fireEvent.click(next)
+    const milestones = getOverviewMilestones(scenario)
+    const routeIndex = milestones.findIndex((milestone) => milestone.id === 'release')
+    fireEvent.click(screen.getByRole('button', { name: `Go to stage ${routeIndex + 1}: Route traffic` }))
     expect(screen.getByText('Endpoint healthy')).toBeInTheDocument()
     expect(container.querySelector('.release-visual')).toHaveAttribute('data-route-target', scenario.hasExistingRuntime ? 'existing' : 'none')
     expect(release).not.toHaveTextContent('Deployment succeeded')
     fireEvent.click(next)
     expect(container.querySelector('.release-visual')).toHaveAttribute('data-route-target', 'candidate')
+    expect(release).not.toHaveTextContent('Deployment succeeded')
+    fireEvent.click(next)
     expect(release).toHaveTextContent('Deployment succeeded')
     expect(release).toHaveTextContent(`${newVersion} is serving customers`)
-    expect(screen.getByRole('button', { name: 'Go to stage 5: After release' })).toHaveAttribute('aria-current', 'step')
+    expect(screen.getByRole('button', { name: `Go to stage ${milestones.length}: After release` })).toHaveAttribute('aria-current', 'step')
     expect(next).toBeEnabled()
     fireEvent.click(next)
     expect(next).toBeDisabled()
@@ -85,7 +90,7 @@ describe('Deployment Overview', () => {
     expect(screen.getByRole('heading', { name: scenario.steps[count].title })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Next step' }))
     fireEvent.click(screen.getByRole('tab', { name: 'Overview' }))
-    expect(screen.getByRole('button', { name: 'Go to stage 2: Build & package' })).toHaveAttribute('aria-current', 'step')
+    expect(screen.getByRole('button', { name: 'Go to stage 2: Build' })).toHaveAttribute('aria-current', 'step')
     fireEvent.click(screen.getByRole('button', { name: 'Previous stage' }))
     fireEvent.click(screen.getByRole('button', { name: 'Technical detail' }))
     expect(screen.getByRole('heading', { name: scenario.steps[count].title })).toBeInTheDocument()
@@ -104,16 +109,31 @@ describe('Deployment Overview', () => {
     expect(screen.getByRole('button', { name: 'Next stage' })).toBeEnabled()
   })
 
-  it('plays all five stages and stops automatically', () => {
+  it('plays every visual station and stops automatically', () => {
     vi.useFakeTimers()
     render(<App />)
     fireEvent.click(screen.getByRole('button', { name: 'Run flow' }))
-    for (let index = 0; index < 5; index += 1) {
+    for (let index = 0; index < getOverviewMilestones(getScenario('manual')).length; index += 1) {
       act(() => vi.advanceTimersByTime(2000))
       act(() => vi.advanceTimersByTime(4500))
     }
     expect(screen.getByRole('heading', { name: 'v1 is live.' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Run flow' })).toBeDisabled()
+  })
+
+  it('moves the OCI payload toward ACR during packaging and removes it on pause', () => {
+    vi.useFakeTimers()
+    const { container } = render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: 'Go to stage 3: Package & publish' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Run flow' }))
+    act(() => vi.advanceTimersByTime(1800))
+    expect(container.querySelectorAll('.flow-packet')).toHaveLength(1)
+    expect(container.querySelector('[data-station="publish"] .flow-packet')).toHaveAttribute('data-payload', 'OCI image')
+    expect(container.querySelector('.flow-map')).toHaveClass('is-running')
+    fireEvent.click(screen.getByRole('button', { name: 'Pause' }))
+    act(() => vi.advanceTimersByTime(10000))
+    expect(container.querySelector('.flow-packet')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Go to stage 3: Package & publish' })).toHaveAttribute('aria-current', 'step')
   })
 
   it('cancels playback when a scenario or view changes', () => {

@@ -6,10 +6,15 @@ explicit AppVersion activation.
 
 ## Views
 
-**Overview** is the default screen for product and leadership demos. Each flow has five
-customer-facing stages, a current/incoming runtime visual, health checks, and the
-customer-visible release result. Playback, direct stage selection, and previous/next
-controls use the same scenario state as the technical view.
+**Overview** is the default screen for product and leadership demos. A connected diagram
+follows source -> build sandbox -> OCI packaging and ACR -> ADC Artifact -> Artifact App
+-> health checks -> YARP -> customer URL. Playback moves a payload along the active
+handoff and highlights the current station. Retained-version flows skip the build.
+
+A separate customer-traffic line stays on the existing version until routing changes;
+background cleanup follows release verification. Static files have their own Blob
+Storage path. One short caption accompanies the current action. Direct station
+selection and previous/next controls share progress with the technical view.
 
 **Technical** retains the detailed sequence, API calls, resource examples, and inspection
 drawer. Switching views preserves the selected flow and progress and pauses playback.

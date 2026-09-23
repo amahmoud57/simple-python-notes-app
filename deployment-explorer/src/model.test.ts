@@ -11,15 +11,19 @@ import {
 import { getOverviewMilestones, getOverviewState } from './overview'
 
 describe('deployment overview', () => {
-  it.each(scenarios)('covers every $id step exactly once in five ordered milestones', (scenario) => {
+  it.each(scenarios)('covers every $id step once with visible build, registry, runtime, and routing handoffs', (scenario) => {
     const milestones = getOverviewMilestones(scenario)
-    expect(milestones).toHaveLength(5)
-    expect(milestones.map((milestone) => milestone.id)).toEqual(['select', 'prepare', 'check', 'release', 'cleanup'])
+    const builds = scenario.id === 'manual' || scenario.id === 'latest'
+    expect(milestones.map((milestone) => milestone.id)).toEqual(['select', ...(builds ? ['build'] : []), 'publish', 'artifact', 'candidate', 'check', 'release', 'verify', 'cleanup'])
     expect(milestones.flatMap((milestone) => scenario.steps.slice(milestone.start, milestone.end))).toEqual(scenario.steps)
     expect(milestones.every((milestone) => milestone.start < milestone.end)).toBe(true)
-    expect(scenario.steps[milestones[2].end - 1].cutoverAfter).toBe('healthy')
-    expect(scenario.steps[milestones[3].end - 1].phase).toBe('succeeded')
-    expect(scenario.steps.slice(milestones[4].start).every((step) => step.phase === 'postCleanup')).toBe(true)
+    const byId = (id: string) => milestones.find((milestone) => milestone.id === id)!
+    expect(scenario.steps[byId('artifact').start].target).toBe('artifact')
+    expect(scenario.steps[byId('candidate').end - 1].cutoverAfter).toBe('nativeReady')
+    expect(scenario.steps[byId('check').end - 1].cutoverAfter).toBe('healthy')
+    expect(scenario.steps[byId('release').end - 1].cutoverAfter).toBe('switched')
+    expect(scenario.steps[byId('verify').end - 1].phase).toBe('succeeded')
+    expect(scenario.steps.slice(byId('cleanup').start).every((step) => step.phase === 'postCleanup')).toBe(true)
   })
 
   it.each(scenarios)('preserves $id traffic at every technical step and overview boundary', (scenario) => {
@@ -30,7 +34,7 @@ describe('deployment overview', () => {
       expect(state.servingVersion).toBe(scenario.id === 'redeploy' ? 'v17' : count > switchIndex ? scenario.newVersion : scenario.oldVersion)
       expect(state.healthy || !state.candidateServing).toBe(true)
     }
-    const healthEnd = getOverviewMilestones(scenario)[2].end
+    const healthEnd = getOverviewMilestones(scenario).find((milestone) => milestone.id === 'check')!.end
     expect(getOverviewState(scenario, healthEnd).candidateServing).toBe(false)
     expect(getOverviewState(scenario, healthEnd).healthy).toBe(true)
   })
@@ -50,13 +54,14 @@ describe('deployment overview', () => {
 
   it('distinguishes fresh builds from retained-output reuse and release success from cleanup', () => {
     for (const id of ['manual', 'latest'] as const) {
-      expect(getOverviewMilestones(getScenario(id))[1].label).toBe('Build & package')
+      expect(getOverviewMilestones(getScenario(id)).find((milestone) => milestone.id === 'publish')?.label).toBe('Package & publish')
+      expect(getOverviewMilestones(getScenario(id)).some((milestone) => milestone.id === 'build')).toBe(true)
     }
     for (const id of ['commit', 'redeploy', 'activate'] as const) {
       expect(getOverviewMilestones(getScenario(id))[1].label).toBe('Reuse outputs')
     }
     const scenario = getScenario('latest')
-    const afterRelease = getOverviewState(scenario, getOverviewMilestones(scenario)[3].end)
+    const afterRelease = getOverviewState(scenario, getOverviewMilestones(scenario).find((milestone) => milestone.id === 'verify')!.end)
     expect(afterRelease.released).toBe(true)
     expect(afterRelease.complete).toBe(false)
     expect(afterRelease.milestone.id).toBe('cleanup')

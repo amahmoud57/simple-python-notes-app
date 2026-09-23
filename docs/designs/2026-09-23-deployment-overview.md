@@ -17,16 +17,16 @@ Add an Overview view alongside the existing Technical view. Open Overview by def
 and support direct links to either view. Keep all five existing deployment scenarios:
 first deploy, deploy latest, deploy commit, redeploy, and activate version.
 
-Group each scenario into a small sequence of customer-facing milestones: select
-source or retained version, build or reuse outputs, prepare and check the candidate,
-switch the stable app URL, and confirm the release. Background cleanup remains
-distinct from deployment success.
+Make the deployment path the primary visual: source, build sandbox, OCI packaging
+and ACR, ADC Artifact, Artifact App, health checks, YARP, and customer URL. Each
+handoff is a distinct playback checkpoint derived from real technical steps.
+Retained-version flows bypass the build. A moving payload and current-station
+highlight show where the flow is; one short caption replaces explanatory panels.
 
-The main visual shows the current and incoming versions and which one serves
-customers. A short outcome statement and compact capability summaries cover exact
-source selection, static and compute outputs, health-gated activation, retained
-versions, and stable URLs. Do not imply global availability, guaranteed zero
-downtime, instant rollback, or unmodeled platform features.
+A separate customer-traffic line stays on the current version until route activation.
+Static files have a separate Blob Storage path. Release verification and subsequent
+background cleanup remain distinct. Do not imply global availability, guaranteed
+zero downtime, instant rollback, or unmodeled platform features.
 
 Playback supports run, pause, previous, next, reset, and direct milestone selection.
 Switching views preserves the selected scenario and progress while stopping playback.
@@ -35,8 +35,8 @@ The existing detailed explorer remains available unchanged in meaning.
 ### Component Structure
 
 - App: shared scenario/progress state, view navigation, and playback integration.
-- Overview component and scoped styles: milestones, release visual, outcomes, and
-  capability summaries using the existing typography, brand, and Lucide icons.
+- Overview component and scoped styles: connected stations, animated handoffs,
+  static output and customer-traffic paths using the existing brand and Lucide icons.
 - Overview projection: derive milestone boundaries from existing step IDs/phases;
   derive traffic from the shared cutover model rather than inventing a second engine.
 - Existing model and component test files: projection and interaction regressions.
@@ -76,7 +76,7 @@ not live telemetry or controls that mutate the stamp.
 
 ### Verification Results
 
-- 60 Vitest tests pass, including all existing technical-view tests.
+- 66 Vitest tests pass, including all existing technical-view tests.
 - TypeScript/Vite production build and Oxlint pass.
 - Playwright verified all five journeys, health-before-traffic ordering, release
   success before cleanup, view switching, keyboard navigation, and pause.
