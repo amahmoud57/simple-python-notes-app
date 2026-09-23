@@ -15,10 +15,13 @@ import {
   HeartPulse,
   PackageCheck,
   Route as RouteIcon,
+  Scan,
   Server,
   ServerOff,
   TerminalSquare,
   Workflow,
+  ZoomIn,
+  ZoomOut,
   type LucideIcon,
 } from 'lucide-react'
 import {
@@ -80,6 +83,8 @@ const payloadIcon: Record<PayloadKind, LucideIcon> = {
 
 const baseStageWidth = 1080
 const stageHeight = 680
+const mapPadding = 12
+const maxMapZoom = 1.5
 
 const point = (id: NodeId, stageWidth = baseStageWidth) => {
   const node = nodes.find((item) => item.id === id) ?? nodes[0]
@@ -312,26 +317,33 @@ export function SystemStage({
   selectedNode,
   onSelectNode,
 }: SystemStageProps) {
-  const stageRef = useRef<HTMLDivElement>(null)
-  const [stageWidth, setStageWidth] = useState(baseStageWidth)
+  const viewportRef = useRef<HTMLDivElement>(null)
+  const [fitZoom, setFitZoom] = useState(1)
+  const [manualZoom, setManualZoom] = useState<number | null>(null)
+  const stageWidth = baseStageWidth
+  const mapZoom = manualZoom ?? fitZoom
+  const minMapZoom = Math.min(0.25, fitZoom)
 
   useLayoutEffect(() => {
-    const stage = stageRef.current
-    if (!stage) return
+    const viewport = viewportRef.current
+    if (!viewport) return
 
-    const updateWidth = () => {
-      const width = Math.max(baseStageWidth, stage.getBoundingClientRect().width)
-      setStageWidth((current) => Math.abs(current - width) < 0.5 ? current : width)
+    const updateFit = () => {
+      const width = viewport.clientWidth - mapPadding * 2
+      const height = viewport.clientHeight - mapPadding * 2
+      if (width <= 0 || height <= 0) return
+      const next = Math.min(1, width / baseStageWidth, height / stageHeight)
+      setFitZoom((current) => Math.abs(current - next) < 0.0001 ? current : next)
     }
 
-    updateWidth()
+    updateFit()
     if (typeof ResizeObserver === 'undefined') {
-      window.addEventListener('resize', updateWidth)
-      return () => window.removeEventListener('resize', updateWidth)
+      window.addEventListener('resize', updateFit)
+      return () => window.removeEventListener('resize', updateFit)
     }
 
-    const observer = new ResizeObserver(updateWidth)
-    observer.observe(stage)
+    const observer = new ResizeObserver(updateFit)
+    observer.observe(viewport)
     return () => observer.disconnect()
   }, [])
 
@@ -457,8 +469,16 @@ export function SystemStage({
         </div>
       </div>
 
-      <div className="stage-scroll">
-        <div ref={stageRef} className={`system-stage ${scenario.hasExistingRuntime ? '' : 'is-first-deploy'} ${cutover === 'active' ? 'is-first-live' : ''}`}>
+      <div className="map-toolbar" role="group" aria-label="Map zoom controls">
+        <span>Deployment map</span>
+        <button type="button" className="icon-button" aria-label="Zoom out map" title="Zoom out map" aria-controls="technical-map" disabled={mapZoom <= minMapZoom} onClick={() => setManualZoom(Math.max(minMapZoom, mapZoom - 0.1))}><ZoomOut size={17} aria-hidden="true" /></button>
+        <output aria-label="Map zoom">{Math.round(mapZoom * 100)}%</output>
+        <button type="button" className="icon-button" aria-label="Zoom in map" title="Zoom in map" aria-controls="technical-map" disabled={mapZoom >= maxMapZoom} onClick={() => setManualZoom(Math.min(maxMapZoom, mapZoom + 0.1))}><ZoomIn size={17} aria-hidden="true" /></button>
+        <button type="button" className="icon-button" aria-label="Fit map to view" title="Fit map to view" aria-controls="technical-map" aria-pressed={manualZoom === null} onClick={() => setManualZoom(null)}><Scan size={17} aria-hidden="true" /></button>
+      </div>
+      <div ref={viewportRef} className="stage-scroll" role="region" aria-label="Technical deployment map" tabIndex={0} style={{ padding: mapPadding }}>
+        <div className="stage-frame" data-zoom-mode={manualZoom === null ? 'fit' : 'manual'} style={{ width: stageWidth * mapZoom, height: stageHeight * mapZoom }}>
+        <div id="technical-map" className={`system-stage ${scenario.hasExistingRuntime ? '' : 'is-first-deploy'} ${cutover === 'active' ? 'is-first-live' : ''}`} style={{ width: stageWidth, height: stageHeight, transform: `scale(${mapZoom})` }}>
           <div className="stage-zone zone-control"><span>Control plane</span></div>
           <div className="stage-zone zone-source"><span>GitHub source</span></div>
           <div className="stage-zone zone-build"><span>Build and outputs</span></div>
@@ -560,6 +580,7 @@ export function SystemStage({
               <PayloadIcon size={16} />
             </div>
           ) : null}
+        </div>
         </div>
       </div>
 

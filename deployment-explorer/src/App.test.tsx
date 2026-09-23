@@ -6,11 +6,126 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import { getScenario, scenarios } from './model'
 import { getOverviewMilestones } from './overview'
+import { configurationSteps } from './configuration'
 
 afterEach(() => {
   cleanup()
   window.history.replaceState(null, '', '/')
   vi.useRealTimers()
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+})
+
+describe('Configuration story', () => {
+  const showStage = (index: number) => fireEvent.click(screen.getByRole('button', { name: `Show configuration stage ${index + 1}: ${configurationSteps[index].label}` }))
+
+  it.each(['overview', 'technical'] as const)('shows immutable snapshots and independent app policy in %s', (view) => {
+    window.history.replaceState(null, '', `#${view}/configuration`)
+    render(<App />)
+    expect(screen.getByRole('tab', { name: 'Configuration' })).toHaveAttribute('aria-selected', 'true')
+    const desired = screen.getByRole('group', { name: 'Desired version configuration' })
+    const active = screen.getByRole('group', { name: 'Active version configuration' })
+    const policy = screen.getByRole('group', { name: 'Effective runtime scaling policy' })
+    showStage(1)
+    expect(desired).toHaveTextContent('EUR')
+    expect(active).toHaveTextContent('CURRENCY=USD')
+    expect(screen.getByRole('article', { name: 'v2 snapshot' })).toHaveAttribute('data-created', 'false')
+    showStage(2)
+    expect(screen.getByRole('article', { name: 'v2 snapshot' })).toHaveTextContent('CURRENCY=EUR')
+    expect(active).toHaveAttribute('data-active-version', 'v1')
+    showStage(3)
+    expect(active).toHaveAttribute('data-active-version', 'v2')
+    expect(active).toHaveTextContent('CURRENCY=EUR')
+    showStage(4)
+    expect(screen.getByRole('status', { name: 'Policy application' })).toHaveTextContent('New policy pending')
+    expect(policy).toHaveTextContent('CPU target 70%')
+    showStage(5)
+    expect(policy).toHaveTextContent('CPU target 60%')
+    expect(screen.getByRole('status', { name: 'Configuration outcome' })).toHaveTextContent('2 AppVersions')
+    showStage(6)
+    expect(active).toHaveAttribute('data-active-version', 'v1')
+    expect(active).toHaveTextContent('CURRENCY=USD')
+    expect(desired).toHaveTextContent('EUR')
+    expect(policy).toHaveTextContent('CPU target 60%')
+    expect(screen.getByRole('status', { name: 'Configuration outcome' })).toHaveTextContent('v1 config restored. App policy unchanged.')
+    expect(screen.getByRole('button', { name: 'Next stage' })).toBeDisabled()
+  })
+
+  it('shares configuration progress across views and keeps deployment progress separate', () => {
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: 'Go to stage 3: Package & publish' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Configuration' }))
+    showStage(5)
+    fireEvent.click(screen.getByRole('tab', { name: 'Technical' }))
+    expect(window.location.hash).toBe('#technical/configuration')
+    expect(screen.getByRole('group', { name: 'Effective runtime scaling policy' })).toHaveTextContent('CPU target 60%')
+    expect(screen.getByText('BuilderApp.versionConfiguration')).toBeInTheDocument()
+    expect(screen.getByText('BuilderApp.scaling')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('tab', { name: 'Overview' }))
+    expect(screen.getByRole('status', { name: 'Configuration stage' })).toHaveTextContent('New policy. Same AppVersion.')
+    fireEvent.click(screen.getByRole('tab', { name: 'Deployment flow' }))
+    expect(screen.getByRole('button', { name: 'Go to stage 3: Package & publish' })).toHaveAttribute('aria-current', 'step')
+    fireEvent.click(screen.getByRole('tab', { name: 'Configuration' }))
+    expect(screen.getByRole('status', { name: 'Configuration stage' })).toHaveTextContent('New policy. Same AppVersion.')
+  })
+
+  it('plays to retained-version activation and resets without changing deployment state', () => {
+    vi.useFakeTimers()
+    window.history.replaceState(null, '', '#overview/configuration')
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: 'Run flow' }))
+    for (let index = 0; index < configurationSteps.length - 1; index += 1) {
+      act(() => vi.advanceTimersByTime(2000))
+      act(() => vi.advanceTimersByTime(4500))
+    }
+    expect(screen.getByRole('button', { name: 'Run flow' })).toBeDisabled()
+    expect(screen.getByRole('group', { name: 'Active version configuration' })).toHaveAttribute('data-active-version', 'v1')
+    expect(screen.getByRole('group', { name: 'Effective runtime scaling policy' })).toHaveTextContent('CPU target 60%')
+    fireEvent.click(screen.getByRole('button', { name: 'Previous stage' }))
+    expect(screen.getByRole('group', { name: 'Active version configuration' })).toHaveAttribute('data-active-version', 'v2')
+    fireEvent.click(screen.getByRole('button', { name: 'Reset configuration story' }))
+    expect(screen.getByRole('button', { name: 'Previous stage' })).toBeDisabled()
+    expect(screen.getByRole('article', { name: 'v2 snapshot' })).toHaveAttribute('data-created', 'false')
+  })
+
+  it('cancels a pending configuration advance when changing views, stories, or history', () => {
+    vi.useFakeTimers()
+    window.history.replaceState(null, '', '#overview/configuration')
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: 'Run flow' }))
+    act(() => vi.advanceTimersByTime(200))
+    fireEvent.click(screen.getByRole('tab', { name: 'Technical' }))
+    act(() => vi.advanceTimersByTime(10000))
+    expect(screen.getByRole('button', { name: 'Previous stage' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Run flow' }))
+    act(() => vi.advanceTimersByTime(200))
+    fireEvent.click(screen.getByRole('tab', { name: 'Deployment flow' }))
+    act(() => vi.advanceTimersByTime(10000))
+    expect(screen.getByRole('heading', { name: 'Request a deployment through ARM' })).toBeInTheDocument()
+    act(() => {
+      window.history.replaceState(null, '', '#overview/configuration')
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+    expect(screen.getByRole('button', { name: 'Previous stage' })).toBeDisabled()
+    expect(screen.getByRole('tab', { name: 'Configuration' })).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('exposes technical field ownership without putting scaling in version JSON', () => {
+    window.history.replaceState(null, '', '#technical/configuration')
+    const { container } = render(<App />)
+    showStage(6)
+    const details = container.querySelector('details')!
+    details.open = true
+    fireEvent.click(screen.getByRole('tab', { name: 'AppVersion v1' }))
+    const frozen = JSON.parse(container.querySelector('.config-contract code')!.textContent!)
+    expect(frozen.configuration.variables[0].value).toBe('USD')
+    expect(frozen.configuration).not.toHaveProperty('scaling')
+    fireEvent.click(screen.getByRole('tab', { name: 'BuilderApp' }))
+    const app = JSON.parse(container.querySelector('.config-contract code')!.textContent!)
+    expect(app.versionConfiguration.variables[0].value).toBe('EUR')
+    expect(app.runtime.versionConfiguration.variables[0].value).toBe('USD')
+    expect(app.scaling.components[0].maxReplicas).toBe(5)
+  })
 })
 
 describe('Deployment Overview', () => {
@@ -177,6 +292,53 @@ describe('Deployment Overview', () => {
 
 describe('Deployment Explorer', () => {
   beforeEach(() => window.history.replaceState(null, '', '#technical'))
+
+  it.each([{ width: 1094, height: 281 }, { width: 1008, height: 233 }, { width: 1168, height: 429 }])('fits the whole technical map into a $width by $height laptop pane', ({ width, height }) => {
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(width)
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(height)
+    const { container } = render(<App />)
+    const frame = container.querySelector<HTMLElement>('.stage-frame')!
+    const map = container.querySelector<HTMLElement>('.system-stage')!
+    const expectedZoom = Math.min(1, (width - 24) / 1080, (height - 24) / 680)
+
+    expect(screen.getByLabelText('Map zoom')).toHaveTextContent(`${Math.round(expectedZoom * 100)}%`)
+    expect(frame).toHaveAttribute('data-zoom-mode', 'fit')
+    expect(Number.parseFloat(frame.style.width)).toBeLessThanOrEqual(width - 24)
+    expect(Number.parseFloat(frame.style.height)).toBeLessThanOrEqual(height - 24)
+    expect(map).toHaveStyle({ transform: `scale(${expectedZoom})` })
+    expect(container.querySelector('.stage-lines')).toHaveAttribute('viewBox', '0 0 1080 680')
+    expect(screen.getByRole('button', { name: 'Fit map to view' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('zooms only the map and refits when its viewport changes', () => {
+    let viewportHeight = 364
+    vi.stubGlobal('ResizeObserver', undefined)
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(1104)
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(() => viewportHeight)
+    const { container } = render(<App />)
+    expect(screen.getByLabelText('Map zoom')).toHaveTextContent('50%')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom in map' }))
+    expect(screen.getByLabelText('Map zoom')).toHaveTextContent('60%')
+    expect(container.querySelector('.stage-frame')).toHaveAttribute('data-zoom-mode', 'manual')
+    expect(container.querySelector('.transfer-brief')).not.toHaveAttribute('style')
+    fireEvent.click(screen.getByRole('button', { name: 'Next step' }))
+    expect(screen.getByRole('heading', { name: 'Forward the authenticated ARM identity' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Map zoom')).toHaveTextContent('60%')
+
+    viewportHeight = 568
+    fireEvent(window, new Event('resize'))
+    expect(screen.getByLabelText('Map zoom')).toHaveTextContent('60%')
+    fireEvent.click(screen.getByRole('button', { name: 'Fit map to view' }))
+    expect(screen.getByLabelText('Map zoom')).toHaveTextContent('80%')
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom out map' }))
+    expect(screen.getByLabelText('Map zoom')).toHaveTextContent('70%')
+    fireEvent.click(screen.getByRole('button', { name: 'Fit map to view' }))
+    viewportHeight = 432
+    fireEvent(window, new Event('resize'))
+    expect(screen.getByLabelText('Map zoom')).toHaveTextContent('60%')
+    expect(screen.getByRole('button', { name: 'Fit map to view' })).toHaveAttribute('aria-pressed', 'true')
+  })
 
   it('explains each transfer without covering the system stage', () => {
     const { container } = render(<App />)

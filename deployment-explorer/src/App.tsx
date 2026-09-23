@@ -7,11 +7,14 @@ import {
   Pause,
   Play,
   RotateCcw,
+  Settings2,
   StepBack,
   StepForward,
+  Workflow,
 } from 'lucide-react'
 import './App.css'
 import { DetailDrawer } from './components/DetailDrawer'
+import { ConfigurationStory } from './components/ConfigurationStory'
 import { Overview } from './components/Overview'
 import { StepRail } from './components/StepRail'
 import { SystemStage } from './components/SystemStage'
@@ -23,14 +26,20 @@ import {
   type Scenario,
 } from './model'
 import { getOverviewState } from './overview'
+import { configurationSteps, getConfigurationState } from './configuration'
 
 const transferDurationMs = 2500
 const readingPauseMs = 1200
 type ExplorerView = 'overview' | 'technical'
-const readView = (): ExplorerView => window.location.hash === '#technical' ? 'technical' : 'overview'
+type ExplorerStory = 'deployment' | 'configuration'
+const readView = (): ExplorerView => window.location.hash.split('/')[0] === '#technical' ? 'technical' : 'overview'
+const readStory = (): ExplorerStory => window.location.hash.split('/')[1] === 'configuration' ? 'configuration' : 'deployment'
+const storyHash = (view: ExplorerView, story: ExplorerStory) => `#${view}${story === 'configuration' ? '/configuration' : ''}`
 
 function App() {
   const [view, setView] = useState<ExplorerView>(readView)
+  const [story, setStory] = useState<ExplorerStory>(readStory)
+  const [configurationPosition, setConfigurationPosition] = useState(0)
   const [scenarioId, setScenarioId] = useState<Scenario['id']>('manual')
   const [completedCount, setCompletedCount] = useState(0)
   const [isPlaying, setIsPlaying] = useState(false)
@@ -39,15 +48,20 @@ function App() {
   const [speed, setSpeed] = useState(0.75)
   const [selectedNode, setSelectedNode] = useState<NodeId | null>(null)
   const scenario = getScenario(scenarioId)
+  const configuration = getConfigurationState(configurationPosition)
+  const isConfiguration = story === 'configuration'
+  const position = isConfiguration ? configurationPosition : completedCount
+  const usesStages = isConfiguration || view === 'overview'
   const activeStep = scenario.steps[completedCount]
-  const complete = completedCount >= scenario.steps.length
+  const complete = isConfiguration ? configuration.complete : completedCount >= scenario.steps.length
   const cutover = getCutoverState(scenario, completedCount, isAnimating ? activeStep : undefined)
   const overview = getOverviewState(scenario, completedCount)
-  const motionDurationMs = (view === 'overview' ? 3200 : transferDurationMs) / speed
+  const motionDurationMs = (usesStages ? 3200 : transferDurationMs) / speed
 
   useEffect(() => {
     const onLocationChange = () => {
       setView(readView())
+      setStory(readStory())
       setIsPlaying(false)
       setIsAnimating(false)
       setTravelStarted(false)
@@ -65,11 +79,17 @@ function App() {
     if (!isAnimating) return
     const startTimer = window.setTimeout(() => setTravelStarted(true), 40)
     const completionTimer = window.setTimeout(() => {
-      const next = view === 'overview'
-        ? getOverviewState(scenario, completedCount).nextCount
-        : Math.min(completedCount + 1, scenario.steps.length)
-      setCompletedCount(next)
-      if (next >= scenario.steps.length) setIsPlaying(false)
+      if (isConfiguration) {
+        const next = Math.min(configurationPosition + 1, configurationSteps.length - 1)
+        setConfigurationPosition(next)
+        if (next === configurationSteps.length - 1) setIsPlaying(false)
+      } else {
+        const next = view === 'overview'
+          ? getOverviewState(scenario, completedCount).nextCount
+          : Math.min(completedCount + 1, scenario.steps.length)
+        setCompletedCount(next)
+        if (next >= scenario.steps.length) setIsPlaying(false)
+      }
       setIsAnimating(false)
       setTravelStarted(false)
     }, motionDurationMs)
@@ -78,22 +98,23 @@ function App() {
       window.clearTimeout(startTimer)
       window.clearTimeout(completionTimer)
     }
-  }, [completedCount, isAnimating, motionDurationMs, scenario, view])
+  }, [completedCount, configurationPosition, isAnimating, isConfiguration, motionDurationMs, scenario, view])
 
   useEffect(() => {
     if (!isPlaying || isAnimating || complete) return
     const timer = window.setTimeout(
       () => setIsAnimating(true),
-      completedCount === 0 ? 180 : readingPauseMs / speed,
+      position === 0 ? 180 : readingPauseMs / speed,
     )
     return () => window.clearTimeout(timer)
-  }, [complete, completedCount, isAnimating, isPlaying, scenario.id, speed])
+  }, [complete, position, isAnimating, isPlaying, scenario.id, speed, story])
 
   const reset = () => {
     setIsPlaying(false)
     setIsAnimating(false)
     setTravelStarted(false)
-    setCompletedCount(0)
+    if (isConfiguration) setConfigurationPosition(0)
+    else setCompletedCount(0)
     setSelectedNode(null)
   }
 
@@ -107,7 +128,14 @@ function App() {
     pause()
     setSelectedNode(null)
     setView(next)
-    if (window.location.hash !== `#${next}`) window.history.pushState(null, '', `#${next}`)
+    if (window.location.hash !== storyHash(next, story)) window.history.pushState(null, '', storyHash(next, story))
+  }
+
+  const selectStory = (next: ExplorerStory) => {
+    pause()
+    setSelectedNode(null)
+    setStory(next)
+    if (window.location.hash !== storyHash(view, next)) window.history.pushState(null, '', storyHash(view, next))
   }
 
   const selectScenario = (next: Scenario) => {
@@ -121,14 +149,16 @@ function App() {
     if (isAnimating || complete) return
     setIsPlaying(false)
     setTravelStarted(false)
-    setCompletedCount(view === 'overview' ? overview.nextCount : Math.min(completedCount + 1, scenario.steps.length))
+    if (isConfiguration) setConfigurationPosition((current) => Math.min(current + 1, configurationSteps.length - 1))
+    else setCompletedCount(view === 'overview' ? overview.nextCount : Math.min(completedCount + 1, scenario.steps.length))
   }
 
   const stepBack = () => {
-    if (isAnimating || completedCount === 0) return
+    if (isAnimating || position === 0) return
     setIsPlaying(false)
     setTravelStarted(false)
-    setCompletedCount(view === 'overview' ? overview.previousCount : Math.max(completedCount - 1, 0))
+    if (isConfiguration) setConfigurationPosition((current) => Math.max(current - 1, 0))
+    else setCompletedCount(view === 'overview' ? overview.previousCount : Math.max(completedCount - 1, 0))
   }
 
   const selectStep = (index: number) => {
@@ -147,13 +177,13 @@ function App() {
   const status = complete
     ? 'Complete'
     : isAnimating
-      ? view === 'overview' ? 'In progress' : 'Transfer in progress'
+      ? usesStages ? 'In progress' : 'Transfer in progress'
       : isPlaying
-        ? view === 'overview' ? 'Playing' : 'Reading pause'
+        ? usesStages ? 'Playing' : 'Reading pause'
         : 'Ready'
 
   return (
-    <div className={`app-shell view-${view}`}>
+    <div className={`app-shell view-${view} story-${story}`}>
       <header className="app-header">
         <div className="brand">
           <span className="brand-mark" aria-hidden="true"><i /><i /><i /></span>
@@ -161,6 +191,17 @@ function App() {
             <span>Embr Builder Apps</span>
             <h1>Deployment Explorer</h1>
           </div>
+        </div>
+        <div className="story-switcher" role="tablist" aria-label="Explorer story">
+          {(['deployment', 'configuration'] as const).map((item, index) => (
+            <button key={item} type="button" role="tab" id={`${item}-tab`} aria-controls={`${item}-story`} aria-selected={story === item} tabIndex={story === item ? 0 : -1} onClick={() => selectStory(item)} onKeyDown={(event) => {
+              const target = event.key === 'Home' ? 0 : event.key === 'End' ? 1 : event.key === 'ArrowRight' || event.key === 'ArrowLeft' ? 1 - index : null
+              if (target === null) return
+              event.preventDefault()
+              selectStory(target === 0 ? 'deployment' : 'configuration')
+              event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[target].focus()
+            }}>{item === 'deployment' ? <Workflow size={16} aria-hidden="true" /> : <Settings2 size={16} aria-hidden="true" />}{item === 'deployment' ? 'Deployment flow' : 'Configuration'}</button>
+          ))}
         </div>
         <div className="view-switcher" role="tablist" aria-label="Explorer view">
           {(['overview', 'technical'] as const).map((item, index) => (
@@ -199,18 +240,18 @@ function App() {
       <main className="explorer-main">
       <div className="command-bar">
         <div className="scenario-title">
-          <span>{view === 'overview' ? 'Selected flow' : scenario.label}</span>
-          <strong>{view === 'overview' ? scenario.label : scenario.title}</strong>
+          <span>{isConfiguration ? 'Configuration lifecycle' : view === 'overview' ? 'Selected flow' : scenario.label}</span>
+          <strong>{isConfiguration ? configuration.step.label : view === 'overview' ? scenario.label : scenario.title}</strong>
         </div>
         <div className="playback-controls">
-          <button type="button" className="icon-button" onClick={reset} aria-label="Reset deployment flow" title="Reset">
+          <button type="button" className="icon-button" onClick={reset} aria-label={isConfiguration ? 'Reset configuration story' : 'Reset deployment flow'} title="Reset">
             <RotateCcw size={18} />
           </button>
-          <button type="button" onClick={stepBack} disabled={isAnimating || completedCount === 0}>
-            <StepBack size={17} /> {view === 'overview' ? 'Previous stage' : 'Previous step'}
+          <button type="button" onClick={stepBack} disabled={isAnimating || position === 0}>
+            <StepBack size={17} /> {usesStages ? 'Previous stage' : 'Previous step'}
           </button>
           <button type="button" onClick={stepOnce} disabled={isAnimating || complete}>
-            <StepForward size={17} /> {view === 'overview' ? 'Next stage' : 'Next step'}
+            <StepForward size={17} /> {usesStages ? 'Next stage' : 'Next step'}
           </button>
           {isPlaying ? (
             <button type="button" className="primary" onClick={pause}>
@@ -234,7 +275,10 @@ function App() {
         </div>
       </div>
 
-      {view === 'overview' ? (
+      <div id={`${story}-story`} className="story-content" role="tabpanel" aria-labelledby={`${story}-tab`}>
+      {isConfiguration ? (
+        <ConfigurationStory view={view} position={configurationPosition} isAnimating={isAnimating} motionDurationMs={motionDurationMs} onStepSelect={(index) => { pause(); setConfigurationPosition(index) }} />
+      ) : view === 'overview' ? (
         <Overview
           scenario={scenario}
           completedCount={completedCount}
@@ -266,9 +310,10 @@ function App() {
         />
       </div>
       )}
+      </div>
       </main>
 
-      {view === 'technical' && selectedNode ? (
+      {!isConfiguration && view === 'technical' && selectedNode ? (
         <DetailDrawer
           key={`${scenario.id}-${selectedNode}`}
           nodeId={selectedNode}

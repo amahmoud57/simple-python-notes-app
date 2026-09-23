@@ -76,7 +76,7 @@ not live telemetry or controls that mutate the stamp.
 
 ### Verification Results
 
-- 66 Vitest tests pass, including all existing technical-view tests.
+- 88 Vitest tests pass, including configuration lifecycles and technical map-fit tests.
 - TypeScript/Vite production build and Oxlint pass.
 - Playwright verified all five journeys, health-before-traffic ordering, release
   success before cleanup, view switching, keyboard navigation, and pause.
@@ -98,3 +98,73 @@ before deploying. Do not modify Embr platform services or unrelated demo apps.
 - Existing technical scenarios and inspection remain functional.
 - Tests, build, lint, desktop/mobile, and keyboard checks pass.
 - Existing amahmoud11 public URL serves the verified update.
+
+## Configuration Story
+
+Status: Implemented, 2026-09-23.
+
+Add a shared Deployment / Configuration story selector to both Overview and Technical.
+Keep existing deployment scenarios and map-fit controls. Configuration is illustrative
+playback, not a form that changes stamp settings.
+
+Use two visibly labeled paths, not explanatory paragraphs:
+
+- Version configuration: desired app values -> immutable AppVersion snapshot -> active
+  version. Show a plain build/runtime variable changing from USD to EUR. Editing desired
+  values does not mutate the active version; creating and deploying v2 captures the edit.
+- App settings: one app-wide policy -> whichever version is active. Show scaling moving
+  from a 1-2 replica CPU policy to a 2-5 replica policy, applying without a new AppVersion or
+  build. Activating v1 restores its USD snapshot but retains the newer scaling policy.
+
+Playback stages: initial v1, edit desired version configuration, create v2 snapshot,
+activate v2, change scaling policy, confirm policy application, activate retained v1.
+Desired, captured, and active states remain visibly distinct. App-wide settings use a
+different icon and label as well as color; independence does not imply instant application.
+
+Overview shows short names, values, arrows, and version locks. Technical shows the same
+state with BuilderApp.versionConfiguration, AppVersion.configuration, BuilderApp.scaling,
+and read-only runtime.versionConfiguration, plus compact example JSON. Switching view
+retains the selected configuration stage and pauses playback.
+
+Scope: variables are confirmed in current main. App-level scaling follows the aligned
+scaling feature contract (Q:/embr-final-pr1634); current main does not yet include that
+feature. Do not invent a public appSettings object, include unsettled compute sizing,
+claim autoscaling is live telemetry, or include scale-to-zero. Auth/identity/automation
+may be labeled as other app-owned settings but are not simulated update flows.
+
+Local hypothesis: a single shared, deterministic configuration story can demonstrate
+that version activation changes the frozen configuration but never rewinds app policy.
+Tests will disconfirm this if editing desired values changes v1, policy changes create
+versions, or restoring v1 resets the policy. Both views must project the same state.
+
+Implementation: add a focused configuration model and shared story component/styles;
+integrate with existing playback and view navigation; reuse current model and App tests.
+Update the existing docs only. Preserve and verify the pending map-fit changes.
+
+Verification: focused lifecycle and interaction tests, full demo tests, build/lint,
+laptop map-fit checks, desktop/mobile screenshots, keyboard/reduced-motion and axe checks,
+then deploy the existing demo branch to amahmoud11 and verify both views live.
+
+Verified locally: all seven configuration stages in both views; exact technical JSON;
+separate configuration and deployment progress; capture and policy payload motion;
+keyboard navigation; reduced motion; zero axe violations with the inspector open at
+390px and 1366px. No clipping at 320, 390, 820, 1280, and 1366px. The deployment map fits
+1280x720, 1366x768, and 1440x900, supports manual zoom across steps, and still opens nodes.
+
+<details>
+<summary>Contract provenance</summary>
+
+- Current main inspected: `6ae2394c698b1b3098bc3e0d6172d7517526be63`.
+  `src/Embr.Contracts/Global/Models/AppVersionConfiguration.cs` defines non-secret
+  build/runtime variables and a defensive snapshot; `BuilderApp.cs` stores desired
+  configuration, while `AppRuntime.cs` reports the active version configuration.
+- Aligned scaling feature inspected: `4fe3d43bc7ec017ff7476a1db0318821f36cd162`.
+  `src/Embr.Contracts/Global/Models/AppScaling.cs` defines app-owned, per-component
+  min/max replica and CPU/memory targets; `BuilderApp.cs` stores them as `scaling`,
+  separately from `versionConfiguration`. The example uses valid 1-2 and 2-5 ranges.
+
+</details>
+
+Alternative: inline configuration badges on every deployment node are smaller, but do
+not demonstrate what editing, capture, and rollback do. A separate static reference
+table is easy to scan but would lose the interactive lifecycle story.

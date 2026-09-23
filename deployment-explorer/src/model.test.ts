@@ -9,6 +9,74 @@ import {
   scenarios,
 } from './model'
 import { getOverviewMilestones, getOverviewState } from './overview'
+import { configurationSteps, getConfigurationDocuments, getConfigurationState } from './configuration'
+
+describe('configuration lifecycles', () => {
+  it('edits desired configuration without changing the active version or creating a snapshot', () => {
+    const edited = getConfigurationState(1)
+    expect(edited.desired.variables[0].value).toBe('EUR')
+    expect(edited.activeVersion.configuration.variables[0].value).toBe('USD')
+    expect(edited.versions).toHaveLength(1)
+    expect(edited.desiredDiffers).toBe(true)
+  })
+
+  it('captures v2 before activation, then runs its own frozen configuration', () => {
+    const captured = getConfigurationState(2)
+    expect(captured.versions.map((version) => version.configuration.variables[0].value)).toEqual(['USD', 'EUR'])
+    expect(captured.activeVersion.id).toBe('v1')
+    const deployed = getConfigurationState(3)
+    expect(deployed.activeVersion.id).toBe('v2')
+    expect(deployed.activeVersion.configuration.variables[0].value).toBe('EUR')
+    expect(deployed.scaling).toEqual(captured.scaling)
+    expect(deployed.desiredDiffers).toBe(false)
+  })
+
+  it('applies app policy independently without changing versions or the deployment', () => {
+    const deployed = getConfigurationState(3)
+    const pending = getConfigurationState(4)
+    const applied = getConfigurationState(5)
+    expect(pending.policyPending).toBe(true)
+    expect(pending.scaling.components[0].maxReplicas).toBe(5)
+    expect(pending.appliedScaling.components[0].maxReplicas).toBe(2)
+    expect(applied.policyPending).toBe(false)
+    expect(applied.appliedScaling).toEqual(applied.scaling)
+    expect(applied.versions).toEqual(deployed.versions)
+    expect(applied.activeVersion).toEqual(deployed.activeVersion)
+    expect(applied.deploymentId).toBe(deployed.deploymentId)
+  })
+
+  it('restores the retained version snapshot without rewinding app policy or desired config', () => {
+    const before = getConfigurationState(5)
+    const restored = getConfigurationState(6)
+    expect(restored.activeVersion.id).toBe('v1')
+    expect(restored.activeVersion.configuration.variables[0].value).toBe('USD')
+    expect(restored.desired.variables[0].value).toBe('EUR')
+    expect(restored.scaling).toEqual(before.scaling)
+    expect(restored.appliedScaling).toEqual(before.appliedScaling)
+    expect(restored.versions).toEqual(before.versions)
+    expect(restored.deploymentId).not.toBe(before.deploymentId)
+  })
+
+  it.each(configurationSteps.map((step, index) => ({ ...step, index })))('keeps $id technical documents consistent with the visual state', ({ index }) => {
+    const state = getConfigurationState(index)
+    const documents = getConfigurationDocuments(index)
+    expect(documents.app.versionConfiguration).toEqual(state.desired)
+    expect(documents.app.scaling).toEqual(state.scaling)
+    expect(documents.app.runtime.versionConfiguration).toEqual(state.activeVersion.configuration)
+    expect(documents.versions.find((version) => version.id === state.activeVersion.id)?.configuration).toEqual(state.activeVersion.configuration)
+    expect(documents.versions.every((version) => !('scaling' in version.configuration))).toBe(true)
+  })
+
+  it('returns isolated example snapshots and clamps navigation to the story bounds', () => {
+    const initial = getConfigurationState(0)
+    initial.desired.variables[0].value = 'CHANGED'
+    expect(initial.activeVersion.configuration.variables[0].value).toBe('USD')
+    expect(getConfigurationState(0).desired.variables[0].value).toBe('USD')
+    expect(getConfigurationState(-1).index).toBe(0)
+    expect(getConfigurationState(Number.NaN).index).toBe(0)
+    expect(getConfigurationState(100).complete).toBe(true)
+  })
+})
 
 describe('deployment overview', () => {
   it.each(scenarios)('covers every $id step once with visible build, registry, runtime, and routing handoffs', (scenario) => {
