@@ -26,6 +26,30 @@ describe('Deployment Overview', () => {
     expect(screen.getByRole('button', { name: 'Previous stage' })).toBeDisabled()
   })
 
+  it.each(scenarios)('adds implementation context to $label without changing the five-stage layout', (scenario) => {
+    const { container } = render(<App />)
+    fireEvent.click(screen.getByRole('tab', { name: scenario.label }))
+    expect(screen.getAllByRole('button', { name: /Go to stage/ })).toHaveLength(5)
+    expect(screen.getByRole('group', { name: 'AppVersion outputs' })).toHaveTextContent('Static assetsBlob Storage')
+    expect(screen.getByRole('group', { name: 'AppVersion outputs' })).toHaveTextContent('OCI imageAzure Container Registry')
+    expect(screen.getByText('Candidate Artifact App')).toBeInTheDocument()
+    expect(screen.getByText(/YARP serves static paths from Blob Storage/)).toBeInTheDocument()
+
+    const prepare = getOverviewMilestones(scenario)[1]
+    fireEvent.click(screen.getByRole('button', { name: `Go to stage 2: ${prepare.label}` }))
+    const details = container.querySelector('.milestone-details')
+    expect(details).toHaveTextContent('OCI image')
+    expect(details).toHaveTextContent('Azure Container Registry')
+    expect(details).toHaveTextContent('ADC Artifact')
+    expect(details).toHaveTextContent(scenario.id === 'manual' || scenario.id === 'latest' ? 'Create an OCI image' : 'Reuse the OCI image')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next stage' }))
+    expect(container.querySelector('.milestone-description')).toHaveTextContent('ADC Artifact App')
+    expect(details).toHaveTextContent('ADC readiness')
+    expect(details).toHaveTextContent('HTTP 200')
+    expect(container.querySelector('.release-visual')).toHaveAttribute('data-route-target', scenario.hasExistingRuntime ? 'existing' : 'none')
+  })
+
   it.each(scenarios)('shows $label health, serving traffic, and cleanup in the right order', (scenario) => {
     const { container } = render(<App />)
     const newVersion = scenario.id === 'redeploy' ? 'v17' : scenario.newVersion

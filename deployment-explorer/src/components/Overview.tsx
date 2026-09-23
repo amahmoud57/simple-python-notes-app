@@ -4,6 +4,8 @@ import {
   Check,
   Circle,
   CircleCheck,
+  Container,
+  Files,
   GitBranch,
   GitCommitHorizontal,
   Globe,
@@ -27,10 +29,10 @@ const scenarioIcons = {
 }
 
 const capabilities = [
-  { icon: Layers, title: 'Frontend + API', detail: 'Static and compute components move together in one release.' },
-  { icon: GitCommitHorizontal, title: 'Reproducible versions', detail: 'Source, outputs, and version configuration stay together.' },
-  { icon: ShieldCheck, title: 'Health-gated releases', detail: 'A candidate must pass health checks before traffic moves.' },
-  { icon: PackageCheck, title: 'Retained-version recovery', detail: 'Bring back an available version without rebuilding its code.' },
+  { icon: Layers, title: 'Static + OCI outputs', detail: 'Static assets in Blob Storage; compute images in Azure Container Registry.' },
+  { icon: GitCommitHorizontal, title: 'Immutable AppVersions', detail: 'Pinned source, component manifest, configuration, and reusable build outputs.' },
+  { icon: ShieldCheck, title: 'ADC Artifact Apps', detail: 'Fresh compute runtime per deployment, gated on readiness and HTTPS health.' },
+  { icon: PackageCheck, title: 'Retained-version recovery', detail: 'Reuse saved assets and OCI images to create a fresh Artifact App without rebuilding.' },
 ]
 
 interface OverviewProps {
@@ -132,6 +134,11 @@ export function Overview({ scenario, completedCount, isAnimating, onScenarioChan
             <p className="overview-eyebrow">{state.complete ? 'Journey complete' : `Stage 0${state.milestoneIndex + 1} / 05`}</p>
             <h3>{state.complete ? `${state.newVersion} is live.` : state.milestone.title}</h3>
             <p className="milestone-description">{state.complete ? state.milestone.result : state.milestone.description}</p>
+            <dl className="milestone-details">
+              {state.milestone.details.map((detail) => (
+                <div key={detail.label}><dt>{detail.label}</dt><dd>{detail.text}</dd></div>
+              ))}
+            </dl>
             <div className={`release-outcome${state.released ? ' is-live' : ''}`} role="status" aria-label="Release status">
               {state.released ? <CircleCheck size={21} aria-hidden="true" /> : <ShieldCheck size={21} aria-hidden="true" />}
               <div>
@@ -149,11 +156,16 @@ export function Overview({ scenario, completedCount, isAnimating, onScenarioChan
               <span><Globe size={16} aria-hidden="true" /> One app URL</span>
               <span className="release-visual-label">Illustrative app</span>
             </div>
+            <div className="release-outputs" role="group" aria-label="AppVersion outputs">
+              <div><Files size={19} aria-hidden="true" /><div><strong>Static assets</strong><span>Blob Storage</span></div></div>
+              <div><Container size={19} aria-hidden="true" /><div><strong>OCI image</strong><span>Azure Container Registry</span></div></div>
+            </div>
+            <p className="output-routing-note">YARP serves static paths from Blob Storage and routes API traffic to the active Artifact App.</p>
             <div className="release-diagram">
               <div className="release-customers">
                 <span className="customer-symbol"><Users size={30} strokeWidth={1.6} aria-hidden="true" /></span>
                 <strong>Customers</strong>
-                <span>{state.servingVersion ? 'App is serving' : 'Not live yet'}</span>
+                <span>{state.servingVersion ? 'API traffic' : 'Not live yet'}</span>
               </div>
               <div className={`traffic-fork${state.servingVersion ? ' is-connected' : ''}`} aria-hidden="true">
                 <span className="traffic-trunk" />
@@ -162,12 +174,12 @@ export function Overview({ scenario, completedCount, isAnimating, onScenarioChan
               </div>
               <div className="release-versions">
                 <article className={`release-version current-version${scenario.hasExistingRuntime && !state.candidateServing ? ' is-serving' : ''}${!scenario.hasExistingRuntime ? ' is-empty' : ''}`}>
-                  <div className="version-heading"><span>{state.candidateServing ? 'Previous runtime' : 'Current runtime'}</span><Box size={18} aria-hidden="true" /></div>
+                  <div className="version-heading"><span>{state.candidateServing ? 'Previous Artifact App' : 'Current Artifact App'}</span><Box size={18} aria-hidden="true" /></div>
                   <strong className="version-name">{state.oldVersion ?? 'No version yet'}</strong>
                   <span className="version-status">{scenario.hasExistingRuntime && !state.candidateServing ? <CircleCheck size={14} aria-hidden="true" /> : <Circle size={12} aria-hidden="true" />}{currentStatus}</span>
                 </article>
                 <article className={`release-version incoming-version${state.candidateServing ? ' is-serving' : ''}${state.healthy ? ' is-healthy' : ''}`}>
-                  <div className="version-heading"><span>{state.candidateServing ? 'New live runtime' : 'Incoming runtime'}</span><Layers size={18} aria-hidden="true" /></div>
+                  <div className="version-heading"><span>{state.candidateServing ? 'New live Artifact App' : 'Candidate Artifact App'}</span><Layers size={18} aria-hidden="true" /></div>
                   <strong className="version-name">{state.newVersion}</strong>
                   <span className="version-status">{state.healthy ? <CircleCheck size={14} aria-hidden="true" /> : <Circle size={12} aria-hidden="true" />}{incomingStatus}</span>
                 </article>
