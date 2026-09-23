@@ -2,6 +2,8 @@ import { startTransition, useEffect, useState } from 'react'
 import {
   Activity,
   Gauge,
+  LayoutDashboard,
+  Network,
   Pause,
   Play,
   RotateCcw,
@@ -10,6 +12,7 @@ import {
 } from 'lucide-react'
 import './App.css'
 import { DetailDrawer } from './components/DetailDrawer'
+import { Overview } from './components/Overview'
 import { StepRail } from './components/StepRail'
 import { SystemStage } from './components/SystemStage'
 import {
@@ -19,11 +22,15 @@ import {
   type NodeId,
   type Scenario,
 } from './model'
+import { getOverviewState } from './overview'
 
 const transferDurationMs = 2500
 const readingPauseMs = 1200
+type ExplorerView = 'overview' | 'technical'
+const readView = (): ExplorerView => window.location.hash === '#technical' ? 'technical' : 'overview'
 
 function App() {
+  const [view, setView] = useState<ExplorerView>(readView)
   const [scenarioId, setScenarioId] = useState<Scenario['id']>('manual')
   const [completedCount, setCompletedCount] = useState(0)
   const [isPlaying, setIsPlaying] = useState(false)
@@ -35,25 +42,43 @@ function App() {
   const activeStep = scenario.steps[completedCount]
   const complete = completedCount >= scenario.steps.length
   const cutover = getCutoverState(scenario, completedCount, isAnimating ? activeStep : undefined)
+  const overview = getOverviewState(scenario, completedCount)
+  const motionDurationMs = (view === 'overview' ? 3200 : transferDurationMs) / speed
+
+  useEffect(() => {
+    const onLocationChange = () => {
+      setView(readView())
+      setIsPlaying(false)
+      setIsAnimating(false)
+      setTravelStarted(false)
+      setSelectedNode(null)
+    }
+    window.addEventListener('hashchange', onLocationChange)
+    window.addEventListener('popstate', onLocationChange)
+    return () => {
+      window.removeEventListener('hashchange', onLocationChange)
+      window.removeEventListener('popstate', onLocationChange)
+    }
+  }, [])
 
   useEffect(() => {
     if (!isAnimating) return
     const startTimer = window.setTimeout(() => setTravelStarted(true), 40)
     const completionTimer = window.setTimeout(() => {
-      setCompletedCount((current) => {
-        const next = Math.min(current + 1, scenario.steps.length)
-        if (next >= scenario.steps.length) setIsPlaying(false)
-        return next
-      })
+      const next = view === 'overview'
+        ? getOverviewState(scenario, completedCount).nextCount
+        : Math.min(completedCount + 1, scenario.steps.length)
+      setCompletedCount(next)
+      if (next >= scenario.steps.length) setIsPlaying(false)
       setIsAnimating(false)
       setTravelStarted(false)
-    }, transferDurationMs / speed)
+    }, motionDurationMs)
 
     return () => {
       window.clearTimeout(startTimer)
       window.clearTimeout(completionTimer)
     }
-  }, [isAnimating, scenario.id, scenario.steps.length, speed])
+  }, [completedCount, isAnimating, motionDurationMs, scenario, view])
 
   useEffect(() => {
     if (!isPlaying || isAnimating || complete) return
@@ -72,6 +97,19 @@ function App() {
     setSelectedNode(null)
   }
 
+  const pause = () => {
+    setIsPlaying(false)
+    setIsAnimating(false)
+    setTravelStarted(false)
+  }
+
+  const selectView = (next: ExplorerView) => {
+    pause()
+    setSelectedNode(null)
+    setView(next)
+    if (window.location.hash !== `#${next}`) window.history.pushState(null, '', `#${next}`)
+  }
+
   const selectScenario = (next: Scenario) => {
     startTransition(() => {
       setScenarioId(next.id)
@@ -83,14 +121,14 @@ function App() {
     if (isAnimating || complete) return
     setIsPlaying(false)
     setTravelStarted(false)
-    setCompletedCount((current) => Math.min(current + 1, scenario.steps.length))
+    setCompletedCount(view === 'overview' ? overview.nextCount : Math.min(completedCount + 1, scenario.steps.length))
   }
 
   const stepBack = () => {
     if (isAnimating || completedCount === 0) return
     setIsPlaying(false)
     setTravelStarted(false)
-    setCompletedCount((current) => Math.max(current - 1, 0))
+    setCompletedCount(view === 'overview' ? overview.previousCount : Math.max(completedCount - 1, 0))
   }
 
   const selectStep = (index: number) => {
@@ -109,13 +147,13 @@ function App() {
   const status = complete
     ? 'Complete'
     : isAnimating
-      ? 'Transfer in progress'
+      ? view === 'overview' ? 'In progress' : 'Transfer in progress'
       : isPlaying
-        ? 'Reading pause'
+        ? view === 'overview' ? 'Playing' : 'Reading pause'
         : 'Ready'
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell view-${view}`}>
       <header className="app-header">
         <div className="brand">
           <span className="brand-mark" aria-hidden="true"><i /><i /><i /></span>
@@ -124,7 +162,33 @@ function App() {
             <h1>Deployment Explorer</h1>
           </div>
         </div>
+        <div className="view-switcher" role="tablist" aria-label="Explorer view">
+          {(['overview', 'technical'] as const).map((item, index) => (
+            <button
+              key={item}
+              type="button"
+              role="tab"
+              id={`${item}-tab`}
+              aria-controls={`${item}-panel`}
+              aria-selected={view === item}
+              tabIndex={view === item ? 0 : -1}
+              onClick={() => selectView(item)}
+              onKeyDown={(event) => {
+                const target = event.key === 'Home' ? 0 : event.key === 'End' ? 1
+                  : event.key === 'ArrowRight' || event.key === 'ArrowLeft' ? 1 - index : null
+                if (target === null) return
+                event.preventDefault()
+                selectView(target === 0 ? 'overview' : 'technical')
+                event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[target].focus()
+              }}
+            >
+              {item === 'overview' ? <LayoutDashboard size={16} aria-hidden="true" /> : <Network size={16} aria-hidden="true" />}
+              {item === 'overview' ? 'Overview' : 'Technical'}
+            </button>
+          ))}
+        </div>
         <div className="header-status">
+          <span className="demo-context">Illustrative scenarios</span>
           <div className="environment-chip"><Activity size={14} /> amahmoud11 / westus2</div>
           <div className={`run-status state-${complete ? 'complete' : isPlaying || isAnimating ? 'running' : 'ready'}`} aria-live="polite">
             <span aria-hidden="true" /> {status}
@@ -132,23 +196,24 @@ function App() {
         </div>
       </header>
 
+      <main className="explorer-main">
       <div className="command-bar">
         <div className="scenario-title">
-          <span>{scenario.label}</span>
-          <strong>{scenario.title}</strong>
+          <span>{view === 'overview' ? 'Selected flow' : scenario.label}</span>
+          <strong>{view === 'overview' ? scenario.label : scenario.title}</strong>
         </div>
         <div className="playback-controls">
           <button type="button" className="icon-button" onClick={reset} aria-label="Reset deployment flow" title="Reset">
             <RotateCcw size={18} />
           </button>
           <button type="button" onClick={stepBack} disabled={isAnimating || completedCount === 0}>
-            <StepBack size={17} /> Previous step
+            <StepBack size={17} /> {view === 'overview' ? 'Previous stage' : 'Previous step'}
           </button>
           <button type="button" onClick={stepOnce} disabled={isAnimating || complete}>
-            <StepForward size={17} /> Next step
+            <StepForward size={17} /> {view === 'overview' ? 'Next stage' : 'Next step'}
           </button>
           {isPlaying ? (
-            <button type="button" className="primary" onClick={() => setIsPlaying(false)}>
+            <button type="button" className="primary" onClick={pause}>
               <Pause size={17} /> Pause
             </button>
           ) : (
@@ -169,7 +234,17 @@ function App() {
         </div>
       </div>
 
-      <main className="workspace">
+      {view === 'overview' ? (
+        <Overview
+          scenario={scenario}
+          completedCount={completedCount}
+          isAnimating={isAnimating}
+          onScenarioChange={selectScenario}
+          onMilestoneSelect={selectStep}
+          onTechnicalView={() => selectView('technical')}
+        />
+      ) : (
+      <div id="technical-panel" className="workspace" role="tabpanel" aria-labelledby="technical-tab">
         <StepRail
           scenarios={scenarios}
           scenario={scenario}
@@ -188,9 +263,11 @@ function App() {
           selectedNode={selectedNode}
           onSelectNode={setSelectedNode}
         />
+      </div>
+      )}
       </main>
 
-      {selectedNode ? (
+      {view === 'technical' && selectedNode ? (
         <DetailDrawer
           key={`${scenario.id}-${selectedNode}`}
           nodeId={selectedNode}

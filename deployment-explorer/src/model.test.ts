@@ -8,6 +8,70 @@ import {
   nodes,
   scenarios,
 } from './model'
+import { getOverviewMilestones, getOverviewState } from './overview'
+
+describe('deployment overview', () => {
+  it.each(scenarios)('covers every $id step exactly once in five ordered milestones', (scenario) => {
+    const milestones = getOverviewMilestones(scenario)
+    expect(milestones).toHaveLength(5)
+    expect(milestones.map((milestone) => milestone.id)).toEqual(['select', 'prepare', 'check', 'release', 'cleanup'])
+    expect(milestones.flatMap((milestone) => scenario.steps.slice(milestone.start, milestone.end))).toEqual(scenario.steps)
+    expect(milestones.every((milestone) => milestone.start < milestone.end)).toBe(true)
+    expect(scenario.steps[milestones[2].end - 1].cutoverAfter).toBe('healthy')
+    expect(scenario.steps[milestones[3].end - 1].phase).toBe('succeeded')
+    expect(scenario.steps.slice(milestones[4].start).every((step) => step.phase === 'postCleanup')).toBe(true)
+  })
+
+  it.each(scenarios)('preserves $id traffic at every technical step and overview boundary', (scenario) => {
+    const switchIndex = scenario.steps.findIndex((step) => step.cutoverAfter === 'switched')
+    for (let count = 0; count <= scenario.steps.length; count += 1) {
+      const state = getOverviewState(scenario, count)
+      expect(state.candidateServing).toBe(count > switchIndex)
+      expect(state.servingVersion).toBe(scenario.id === 'redeploy' ? 'v17' : count > switchIndex ? scenario.newVersion : scenario.oldVersion)
+      expect(state.healthy || !state.candidateServing).toBe(true)
+    }
+    const healthEnd = getOverviewMilestones(scenario)[2].end
+    expect(getOverviewState(scenario, healthEnd).candidateServing).toBe(false)
+    expect(getOverviewState(scenario, healthEnd).healthy).toBe(true)
+  })
+
+  it.each(scenarios)('navigates $id milestones forward and backward, including mid-step entry', (scenario) => {
+    const milestones = getOverviewMilestones(scenario)
+    for (const [index, milestone] of milestones.entries()) {
+      expect(getOverviewState(scenario, milestone.start).nextCount).toBe(milestone.end)
+      expect(getOverviewState(scenario, milestone.end).previousCount).toBe(milestone.start)
+      expect(getOverviewState(scenario, milestone.start).previousCount).toBe(milestones[Math.max(index - 1, 0)].start)
+      if (milestone.end - milestone.start > 1) {
+        expect(getOverviewState(scenario, milestone.start + 1).previousCount).toBe(milestone.start)
+      }
+    }
+    expect(getOverviewState(scenario, scenario.steps.length).complete).toBe(true)
+  })
+
+  it('distinguishes fresh builds from retained-output reuse and release success from cleanup', () => {
+    for (const id of ['manual', 'latest'] as const) {
+      expect(getOverviewMilestones(getScenario(id))[1].label).toBe('Build & package')
+    }
+    for (const id of ['commit', 'redeploy', 'activate'] as const) {
+      expect(getOverviewMilestones(getScenario(id))[1].label).toBe('Reuse outputs')
+    }
+    const scenario = getScenario('latest')
+    const afterRelease = getOverviewState(scenario, getOverviewMilestones(scenario)[3].end)
+    expect(afterRelease.released).toBe(true)
+    expect(afterRelease.complete).toBe(false)
+    expect(afterRelease.milestone.id).toBe('cleanup')
+  })
+
+  it('shows redeploy as the same app version on two different runtimes', () => {
+    const state = getOverviewState(getScenario('redeploy'), 0)
+    expect(state.oldVersion).toBe('v17')
+    expect(state.newVersion).toBe('v17')
+  })
+
+  it('rejects an incomplete scenario instead of inventing a release boundary', () => {
+    expect(() => getOverviewMilestones({ ...getScenario('manual'), steps: [] })).toThrow('ordered overview journey')
+  })
+})
 
 describe('deployment model', () => {
   it('gives every scenario complete, directional step details', () => {

@@ -1,14 +1,132 @@
 // @vitest-environment jsdom
 
 import '@testing-library/jest-dom/vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
-import { getScenario } from './model'
+import { getScenario, scenarios } from './model'
+import { getOverviewMilestones } from './overview'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  window.history.replaceState(null, '', '/')
+  vi.useRealTimers()
+})
+
+describe('Deployment Overview', () => {
+  it('opens with five customer-facing stages and no internal API diagram', () => {
+    render(<App />)
+    expect(screen.getByRole('main')).toContainElement(screen.getByRole('tabpanel', { name: 'Overview' }))
+    expect(screen.getByRole('main')).toContainElement(screen.getByRole('button', { name: 'Next stage' }))
+    expect(screen.getByRole('tab', { name: 'Overview' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('heading', { name: 'From source to a running app.' })).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: /Go to stage/ })).toHaveLength(5)
+    expect(screen.getByRole('status', { name: 'Release status' })).toHaveTextContent('No live version yet')
+    expect(screen.queryByRole('button', { name: 'Inspect ARM API' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Previous stage' })).toBeDisabled()
+  })
+
+  it.each(scenarios)('shows $label health, serving traffic, and cleanup in the right order', (scenario) => {
+    const { container } = render(<App />)
+    const newVersion = scenario.id === 'redeploy' ? 'v17' : scenario.newVersion
+    fireEvent.click(screen.getByRole('tab', { name: scenario.label }))
+    const next = screen.getByRole('button', { name: 'Next stage' })
+    const release = screen.getByRole('status', { name: 'Release status' })
+    for (let index = 0; index < 3; index += 1) fireEvent.click(next)
+    expect(screen.getByText('Endpoint healthy')).toBeInTheDocument()
+    expect(container.querySelector('.release-visual')).toHaveAttribute('data-route-target', scenario.hasExistingRuntime ? 'existing' : 'none')
+    expect(release).not.toHaveTextContent('Deployment succeeded')
+    fireEvent.click(next)
+    expect(container.querySelector('.release-visual')).toHaveAttribute('data-route-target', 'candidate')
+    expect(release).toHaveTextContent('Deployment succeeded')
+    expect(release).toHaveTextContent(`${newVersion} is serving customers`)
+    expect(screen.getByRole('button', { name: 'Go to stage 5: After release' })).toHaveAttribute('aria-current', 'step')
+    expect(next).toBeEnabled()
+    fireEvent.click(next)
+    expect(next).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Run flow' })).toBeDisabled()
+    expect(screen.getByRole('heading', { name: `${newVersion} is live.` })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Reset deployment flow' }))
+    expect(screen.getByRole('button', { name: 'Previous stage' })).toBeDisabled()
+    expect(release).not.toHaveTextContent('Deployment succeeded')
+  })
+
+  it('preserves progress across views, including entry in the middle of a milestone', () => {
+    render(<App />)
+    fireEvent.click(screen.getByRole('tab', { name: 'Deploy latest' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Next stage' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Technical' }))
+    const scenario = getScenario('latest')
+    const count = getOverviewMilestones(scenario)[0].end
+    expect(screen.getByRole('heading', { name: scenario.steps[count].title })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Next step' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Overview' }))
+    expect(screen.getByRole('button', { name: 'Go to stage 2: Build & package' })).toHaveAttribute('aria-current', 'step')
+    fireEvent.click(screen.getByRole('button', { name: 'Previous stage' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Technical detail' }))
+    expect(screen.getByRole('heading', { name: scenario.steps[count].title })).toBeInTheDocument()
+    expect(window.location.hash).toBe('#technical')
+  })
+
+  it('pauses an in-flight overview stage without a delayed advance', () => {
+    vi.useFakeTimers()
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: 'Run flow' }))
+    act(() => vi.advanceTimersByTime(200))
+    expect(screen.getByRole('button', { name: 'Next stage' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Pause' }))
+    act(() => vi.advanceTimersByTime(10000))
+    expect(screen.getByRole('button', { name: 'Go to stage 1: Choose source' })).toHaveAttribute('aria-current', 'step')
+    expect(screen.getByRole('button', { name: 'Next stage' })).toBeEnabled()
+  })
+
+  it('plays all five stages and stops automatically', () => {
+    vi.useFakeTimers()
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: 'Run flow' }))
+    for (let index = 0; index < 5; index += 1) {
+      act(() => vi.advanceTimersByTime(2000))
+      act(() => vi.advanceTimersByTime(4500))
+    }
+    expect(screen.getByRole('heading', { name: 'v1 is live.' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Run flow' })).toBeDisabled()
+  })
+
+  it('cancels playback when a scenario or view changes', () => {
+    vi.useFakeTimers()
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: 'Run flow' }))
+    act(() => vi.advanceTimersByTime(200))
+    fireEvent.click(screen.getByRole('tab', { name: 'Redeploy' }))
+    act(() => vi.advanceTimersByTime(10000))
+    expect(screen.getByRole('button', { name: 'Go to stage 1: Choose version' })).toHaveAttribute('aria-current', 'step')
+    fireEvent.click(screen.getByRole('button', { name: 'Run flow' }))
+    act(() => vi.advanceTimersByTime(200))
+    fireEvent.click(screen.getByRole('tab', { name: 'Technical' }))
+    act(() => vi.advanceTimersByTime(10000))
+    expect(screen.getByRole('heading', { name: 'Request a retained-version redeploy' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Run flow' })).toBeEnabled()
+  })
+
+  it('supports keyboard tab navigation and browser history changes', () => {
+    render(<App />)
+    const overviewTab = screen.getByRole('tab', { name: 'Overview' })
+    fireEvent.keyDown(overviewTab, { key: 'ArrowRight' })
+    expect(screen.getByRole('tab', { name: 'Technical' })).toHaveFocus()
+    act(() => {
+      window.history.replaceState(null, '', '#overview')
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+    expect(overviewTab).toHaveAttribute('aria-selected', 'true')
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'First deploy' }), { key: 'End' })
+    expect(screen.getByRole('tab', { name: 'Activate version' })).toHaveFocus()
+    expect(screen.getByRole('tab', { name: 'Activate version' })).toHaveAttribute('aria-selected', 'true')
+  })
+})
 
 describe('Deployment Explorer', () => {
+  beforeEach(() => window.history.replaceState(null, '', '#technical'))
+
   it('explains each transfer without covering the system stage', () => {
     const { container } = render(<App />)
 
