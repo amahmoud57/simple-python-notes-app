@@ -48,7 +48,7 @@ export function Overview({ scenario, completedCount, isAnimating, motionDuration
   const trafficTarget = state.candidateServing ? 'candidate' : scenario.hasExistingRuntime ? 'existing' : 'none'
 
   useEffect(() => {
-    if (!isAnimating || !window.matchMedia?.('(max-width: 680px)').matches) return
+    if (!isAnimating || !window.matchMedia?.('(max-width: 760px)').matches) return
     root.current?.querySelector('[aria-current="step"]')?.scrollIntoView({
       block: 'center',
       behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth',
@@ -109,14 +109,15 @@ export function Overview({ scenario, completedCount, isAnimating, motionDuration
               return (
                 <li key={milestone.id} data-station={milestone.id} className={`flow-stop ${done ? 'is-done' : active ? 'is-current' : 'is-upcoming'}`} style={{ '--column': index < 4 ? index + 1 : 8 - index, '--row': index < 4 ? 1 : 2 } as CSSProperties}>
                   {index > 0 && (
-                    <span className={`flow-connector direction-${direction}`} aria-hidden="true">
-                      {active && isAnimating && <span key={`${milestone.id}-${motionDurationMs}`} className="flow-packet" data-payload={milestone.payload}><Container size={16} /></span>}
+                    <span className={`flow-connector direction-${direction}`}>
+                      <span className="flow-handoff" id={`flow-handoff-${milestone.id}`}>{milestone.handoff}</span>
+                      {active && isAnimating && <span key={`${milestone.id}-${motionDurationMs}`} className="flow-packet" data-payload={milestone.payload} aria-hidden="true"><Container size={16} /></span>}
                     </span>
                   )}
-                  <button type="button" className="flow-station" aria-label={`Go to stage ${index + 1}: ${milestone.label}`} aria-current={active ? 'step' : undefined} onClick={() => onMilestoneSelect(milestone.start)} title={milestone.description}>
+                  <button type="button" className="flow-station" aria-label={`Go to stage ${index + 1}: ${milestone.label}`} aria-describedby={`flow-context-${milestone.id}${index > 0 ? ` flow-handoff-${milestone.id}` : ''}`} aria-current={active ? 'step' : undefined} onClick={() => onMilestoneSelect(milestone.start)} title={milestone.description}>
                     <span className="flow-symbol"><Icon size={32} strokeWidth={1.6} aria-hidden="true" /><span className="flow-number" aria-hidden="true">{done ? <Check size={12} /> : index + 1}</span></span>
                     <strong>{milestone.station}</strong>
-                    <span className="flow-action">{milestone.label}</span>
+                    <span className="flow-action" id={`flow-context-${milestone.id}`}>{milestone.context}</span>
                     <span className="flow-state">{done ? <><Check size={12} aria-hidden="true" />{milestone.id === 'check' ? 'Endpoint healthy' : 'Done'}</> : active ? isAnimating ? 'In progress' : 'You are here' : 'Up next'}</span>
                   </button>
                 </li>
@@ -127,9 +128,9 @@ export function Overview({ scenario, completedCount, isAnimating, motionDuration
           <div className={`flow-static-path${assetsStored ? ' outputs-ready' : ''}`} role="group" aria-label="Static asset path" data-assets-stored={assetsStored}>
             <span><Files size={19} aria-hidden="true" />Static frontend</span>
             <ArrowRight size={20} aria-hidden="true" />
-            <span><Database size={19} aria-hidden="true" />Blob Storage</span>
+            <span><Database size={19} aria-hidden="true" />Embr Blob Storage</span>
             <ArrowRight size={20} aria-hidden="true" />
-            <span><Route size={19} aria-hidden="true" />YARP static paths</span>
+            <span><Route size={19} aria-hidden="true" />Embr YARP serves files</span>
             <small>{!builds ? 'Retained files' : assetsStored ? 'Files published' : 'Awaiting publish'}</small>
           </div>
         </div>
@@ -138,9 +139,9 @@ export function Overview({ scenario, completedCount, isAnimating, motionDuration
           <div className={`customer-traffic${state.servingVersion ? ' is-serving' : ''}`} role="group" aria-label="Customer traffic">
             <span><Users size={23} aria-hidden="true" />Customers</span>
             <span className="traffic-wire" aria-hidden="true" />
-            <span><Route size={22} aria-hidden="true" />YARP</span>
+            <span><Route size={22} aria-hidden="true" />Embr YARP</span>
             <span className="traffic-wire" aria-hidden="true" />
-            <span key={trafficTarget} className="traffic-destination"><Server size={25} aria-hidden="true" /><span>{state.servingVersion ? `Artifact App ${state.servingVersion}` : 'No active app'}<small>{state.candidateServing ? 'New runtime' : state.servingVersion ? 'Current runtime' : 'Not live yet'}</small></span></span>
+            <span key={trafficTarget} className="traffic-destination"><Server size={25} aria-hidden="true" /><span>{state.servingVersion ? `Artifact App ${state.servingVersion}` : 'No active app'}<small>{state.candidateServing ? 'New ADC runtime' : state.servingVersion ? 'Current ADC runtime' : 'Not live yet'}</small></span></span>
           </div>
           <div className="release-outcome" role="status" aria-label="Release status">
             {state.released ? <CircleCheck size={18} aria-hidden="true" /> : <ShieldCheck size={18} aria-hidden="true" />}

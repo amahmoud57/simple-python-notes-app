@@ -73,6 +73,9 @@ body:has(.view-overview),
 .flow-connector.direction-reverse::after { right: auto; left: 0; transform: rotate(-135deg); }
 .flow-connector.direction-turn { top: calc(31px - var(--track-span)); right: -18px; width: calc(50% - 26px); height: var(--track-span); background: transparent; border: 2px solid var(--wire); border-left: 0; border-radius: 0 12px 12px 0; }
 .flow-connector.direction-turn::after { top: auto; right: auto; bottom: -4px; left: 0; transform: rotate(-135deg); }
+.flow-handoff { position: absolute; bottom: 9px; left: 0; width: 100%; padding-inline: 2px; color: var(--overview-muted); text-align: center; font: 550 10px/1.25 var(--mono); }
+.direction-turn .flow-handoff { top: calc(var(--row-height) - 16px); bottom: auto; width: 100%; }
+.is-current .flow-handoff { color: var(--overview-cyan); font-weight: 700; }
 .is-done .flow-connector { --wire: #5f9f7e; }
 .is-current .flow-connector { --wire: var(--overview-cyan); }
 .flow-packet { position: absolute; z-index: 3; top: 0; left: 0; display: grid; place-items: center; width: 28px; height: 28px; color: #fff; background: var(--overview-cyan); border: 2px solid #fff; border-radius: 6px; box-shadow: 0 3px 8px #08698230; transform: translate(-50%, -50%); animation: flow-forward var(--flow-duration) linear both; }
@@ -133,7 +136,7 @@ body:has(.view-overview),
   .flow-static-path { flex-wrap: wrap; gap: 12px; }
   .flow-static-path small { flex-basis: 100%; margin: 0; text-align: center; }
 }
-@media (max-width: 680px) {
+@media (max-width: 760px) {
   .overview { padding: 22px 16px; }
   .overview-heading { align-items: flex-start; flex-direction: column; gap: 8px; margin-bottom: 14px; }
   .overview-heading h2 { font-size: 25px; }
@@ -157,6 +160,8 @@ body:has(.view-overview),
   .flow-connector::after,
   .flow-connector.direction-reverse::after,
   .flow-connector.direction-turn::after { top: auto; right: auto; bottom: 0; left: -3px; transform: rotate(135deg); }
+  .flow-handoff,
+  .direction-turn .flow-handoff { top: 50%; bottom: auto; left: 17px; width: max-content; padding: 0; transform: translateY(-50%); font-size: 9px; }
   .flow-packet,
   .direction-reverse .flow-packet,
   .direction-turn .flow-packet { left: 0; width: 23px; height: 23px; animation-name: flow-down; }
