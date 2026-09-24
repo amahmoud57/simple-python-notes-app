@@ -19,8 +19,8 @@ afterEach(() => {
 describe('Configuration story', () => {
   const showStage = (index: number) => fireEvent.click(screen.getByRole('button', { name: `Show configuration stage ${index + 1}: ${configurationSteps[index].label}` }))
 
-  it.each(['overview', 'technical'] as const)('shows immutable snapshots and independent app policy in %s', (view) => {
-    window.history.replaceState(null, '', `#${view}/configuration`)
+  it('keeps the detailed snapshot and policy walkthrough in Technical', () => {
+    window.history.replaceState(null, '', '#technical/configuration')
     render(<App />)
     expect(screen.getByRole('tab', { name: 'Configuration' })).toHaveAttribute('aria-selected', 'true')
     const desired = screen.getByRole('group', { name: 'Desired version configuration' })
@@ -51,27 +51,29 @@ describe('Configuration story', () => {
     expect(screen.getByRole('button', { name: 'Next stage' })).toBeDisabled()
   })
 
-  it('shares configuration progress across views and keeps deployment progress separate', () => {
+  it('retains the Technical walkthrough while Overview is always one combined canvas', () => {
     render(<App />)
     fireEvent.click(screen.getByRole('button', { name: 'Go to stage 3: Package & publish' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Technical' }))
     fireEvent.click(screen.getByRole('tab', { name: 'Configuration' }))
     showStage(5)
-    fireEvent.click(screen.getByRole('tab', { name: 'Technical' }))
     expect(window.location.hash).toBe('#technical/configuration')
     expect(screen.getByRole('group', { name: 'Effective runtime scaling policy' })).toHaveTextContent('CPU target 60%')
     expect(screen.getByText('BuilderApp.versionConfiguration')).toBeInTheDocument()
     expect(screen.getByText('BuilderApp.scaling')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('tab', { name: 'Overview' }))
-    expect(screen.getByRole('status', { name: 'Configuration stage' })).toHaveTextContent('New policy. Same AppVersion.')
-    fireEvent.click(screen.getByRole('tab', { name: 'Deployment flow' }))
+    expect(screen.queryByRole('tab', { name: 'Configuration' })).not.toBeInTheDocument()
+    expect(screen.getByRole('group', { name: 'Release version snapshot' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'App-wide settings' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Go to stage 3: Package & publish' })).toHaveAttribute('aria-current', 'step')
-    fireEvent.click(screen.getByRole('tab', { name: 'Configuration' }))
+    expect(window.location.hash).toBe('#overview')
+    fireEvent.click(screen.getByRole('tab', { name: 'Technical' }))
     expect(screen.getByRole('status', { name: 'Configuration stage' })).toHaveTextContent('New policy. Same AppVersion.')
   })
 
   it('plays to retained-version activation and resets without changing deployment state', () => {
     vi.useFakeTimers()
-    window.history.replaceState(null, '', '#overview/configuration')
+    window.history.replaceState(null, '', '#technical/configuration')
     render(<App />)
     fireEvent.click(screen.getByRole('button', { name: 'Run flow' }))
     for (let index = 0; index < configurationSteps.length - 1; index += 1) {
@@ -90,13 +92,14 @@ describe('Configuration story', () => {
 
   it('cancels a pending configuration advance when changing views, stories, or history', () => {
     vi.useFakeTimers()
-    window.history.replaceState(null, '', '#overview/configuration')
+    window.history.replaceState(null, '', '#technical/configuration')
     render(<App />)
     fireEvent.click(screen.getByRole('button', { name: 'Run flow' }))
     act(() => vi.advanceTimersByTime(200))
-    fireEvent.click(screen.getByRole('tab', { name: 'Technical' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Overview' }))
     act(() => vi.advanceTimersByTime(10000))
     expect(screen.getByRole('button', { name: 'Previous stage' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('tab', { name: 'Technical' }))
     fireEvent.click(screen.getByRole('button', { name: 'Run flow' }))
     act(() => vi.advanceTimersByTime(200))
     fireEvent.click(screen.getByRole('tab', { name: 'Deployment flow' }))
@@ -107,7 +110,8 @@ describe('Configuration story', () => {
       window.dispatchEvent(new PopStateEvent('popstate'))
     })
     expect(screen.getByRole('button', { name: 'Previous stage' })).toBeDisabled()
-    expect(screen.getByRole('tab', { name: 'Configuration' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.queryByRole('tab', { name: 'Configuration' })).not.toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Deployment scenario' })).toBeInTheDocument()
   })
 
   it('exposes technical field ownership without putting scaling in version JSON', () => {
@@ -129,12 +133,19 @@ describe('Configuration story', () => {
 })
 
 describe('Deployment Overview', () => {
+  const selectScenario = (id: string) => fireEvent.change(screen.getByRole('combobox', { name: 'Deployment scenario' }), { target: { value: id } })
+
   it('opens with a visual deployment path and no detail paragraphs or API diagram', () => {
     const { container } = render(<App />)
     expect(screen.getByRole('main')).toContainElement(screen.getByRole('tabpanel', { name: 'Overview' }))
     expect(screen.getByRole('main')).toContainElement(screen.getByRole('button', { name: 'Next stage' }))
     expect(screen.getByRole('tab', { name: 'Overview' })).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByRole('heading', { name: 'From source to a running app.' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Pin the source.' })).toBeInTheDocument()
+    expect(screen.queryByRole('tablist', { name: 'Explorer story' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: 'Configuration' })).not.toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Deployment scenario' })).toBeInTheDocument()
+    expect(screen.getByRole('group', { name: 'Release version snapshot' })).toBeInTheDocument()
+    expect(screen.getByRole('group', { name: 'Effective runtime scaling policy' })).toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: /Go to stage/ })).toHaveLength(9)
     expect(screen.getByRole('list', { name: 'Deployment flow' })).toBeInTheDocument()
     expect(container.querySelector('.milestone-details')).not.toBeInTheDocument()
@@ -146,7 +157,7 @@ describe('Deployment Overview', () => {
 
   it.each(scenarios)('advances $label through the actual registry, artifact, runtime, and route stations', (scenario) => {
     const { container } = render(<App />)
-    fireEvent.click(screen.getByRole('tab', { name: scenario.label }))
+    selectScenario(scenario.id)
     const milestones = getOverviewMilestones(scenario)
     expect(screen.getAllByRole('button', { name: /Go to stage/ })).toHaveLength(milestones.length)
     expect(screen.getByRole('group', { name: 'Static asset path' })).toHaveTextContent('Embr Blob Storage')
@@ -157,7 +168,7 @@ describe('Deployment Overview', () => {
     expect(container.querySelector('[data-station="candidate"]')).toHaveTextContent('ADC Artifact App')
     expect(container.querySelector('[data-station="candidate"]')).toHaveTextContent('Runs the Artifact Version')
     expect(screen.getByRole('group', { name: 'Customer traffic' })).toHaveTextContent('Embr YARP')
-    expect(container.querySelectorAll('.flow-connector')).toHaveLength(milestones.length - 2)
+    expect(container.querySelectorAll('.flow-connector')).toHaveLength(milestones.length - 3)
     for (const [index, milestone] of milestones.entries()) {
       const station = screen.getByRole('button', { name: `Go to stage ${index + 1}: ${milestone.label}` })
       expect(station).toHaveAttribute('aria-current', 'step')
@@ -176,7 +187,7 @@ describe('Deployment Overview', () => {
   it.each(scenarios)('shows $label health, serving traffic, and cleanup in the right order', (scenario) => {
     const { container } = render(<App />)
     const newVersion = scenario.id === 'redeploy' ? 'v17' : scenario.newVersion
-    fireEvent.click(screen.getByRole('tab', { name: scenario.label }))
+    selectScenario(scenario.id)
     const next = screen.getByRole('button', { name: 'Next stage' })
     const release = screen.getByRole('status', { name: 'Release status' })
     const milestones = getOverviewMilestones(scenario)
@@ -204,7 +215,7 @@ describe('Deployment Overview', () => {
 
   it('preserves progress across views, including entry in the middle of a milestone', () => {
     render(<App />)
-    fireEvent.click(screen.getByRole('tab', { name: 'Deploy latest' }))
+    selectScenario('latest')
     fireEvent.click(screen.getByRole('button', { name: 'Next stage' }))
     fireEvent.click(screen.getByRole('tab', { name: 'Technical' }))
     const scenario = getScenario('latest')
@@ -263,7 +274,7 @@ describe('Deployment Overview', () => {
     render(<App />)
     fireEvent.click(screen.getByRole('button', { name: 'Run flow' }))
     act(() => vi.advanceTimersByTime(200))
-    fireEvent.click(screen.getByRole('tab', { name: 'Redeploy' }))
+    selectScenario('redeploy')
     act(() => vi.advanceTimersByTime(10000))
     expect(screen.getByRole('button', { name: 'Go to stage 1: Choose version' })).toHaveAttribute('aria-current', 'step')
     fireEvent.click(screen.getByRole('button', { name: 'Run flow' }))
@@ -284,9 +295,58 @@ describe('Deployment Overview', () => {
       window.dispatchEvent(new PopStateEvent('popstate'))
     })
     expect(overviewTab).toHaveAttribute('aria-selected', 'true')
-    fireEvent.keyDown(screen.getByRole('tab', { name: 'First deploy' }), { key: 'End' })
-    expect(screen.getByRole('tab', { name: 'Activate version' })).toHaveFocus()
-    expect(screen.getByRole('tab', { name: 'Activate version' })).toHaveAttribute('aria-selected', 'true')
+    selectScenario('activate')
+    expect(screen.getByRole('combobox', { name: 'Deployment scenario' })).toHaveValue('activate')
+    expect(screen.getByRole('button', { name: 'Go to stage 1: Choose version' })).toHaveAttribute('aria-current', 'step')
+  })
+
+  it('opens old Overview configuration links as the unified canvas, without a second menu', () => {
+    window.history.replaceState(null, '', '#overview/configuration')
+    render(<App />)
+    expect(screen.queryByRole('tablist', { name: 'Explorer story' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('list', { name: 'Configuration lifecycle stages' })).not.toBeInTheDocument()
+    expect(screen.getByRole('list', { name: 'Deployment flow' })).toBeInTheDocument()
+    expect(screen.getByRole('group', { name: 'Desired version configuration' })).toHaveTextContent('CURRENCY=EUR')
+    expect(screen.getByRole('group', { name: 'Effective runtime scaling policy' })).toBeInTheDocument()
+  })
+
+  it('applies app-wide scaling without advancing a release and retains it when restoring an old version', () => {
+    vi.useFakeTimers()
+    render(<App />)
+    selectScenario('latest')
+    fireEvent.click(screen.getByRole('button', { name: 'Go to stage 3: Package & publish' }))
+    const captured = screen.getByRole('group', { name: 'Release version snapshot' }).textContent
+    fireEvent.click(screen.getByRole('button', { name: 'Apply 2-5 replicas' }))
+    expect(screen.getByRole('status', { name: 'Policy application' })).toHaveTextContent('Pending application')
+    expect(screen.getByRole('group', { name: 'Effective runtime scaling policy' })).toHaveTextContent('1-2 replicas')
+    act(() => vi.advanceTimersByTime(1600))
+    expect(screen.getByRole('group', { name: 'Effective runtime scaling policy' })).toHaveTextContent('2-5 replicas')
+    expect(screen.getByRole('group', { name: 'Release version snapshot' }).textContent).toBe(captured)
+    expect(screen.getByRole('button', { name: 'Go to stage 3: Package & publish' })).toHaveAttribute('aria-current', 'step')
+    selectScenario('activate')
+    const number = getOverviewMilestones(getScenario('activate')).findIndex((item) => item.id === 'release') + 1
+    fireEvent.click(screen.getByRole('button', { name: `Go to stage ${number}: Route traffic` }))
+    fireEvent.click(screen.getByRole('button', { name: 'Next stage' }))
+    expect(screen.getByRole('group', { name: 'Active version configuration' })).toHaveTextContent('CURRENCY=USD')
+    expect(screen.getByRole('group', { name: 'Desired version configuration' })).toHaveTextContent('CURRENCY=EUR')
+    expect(screen.getByRole('group', { name: 'Effective runtime scaling policy' })).toHaveTextContent('2-5 replicas')
+    fireEvent.click(screen.getByRole('button', { name: 'Reset deployment flow' }))
+    expect(screen.getByRole('group', { name: 'Effective runtime scaling policy' })).toHaveTextContent('2-5 replicas')
+    fireEvent.click(screen.getByRole('button', { name: 'Reset app policy' }))
+    expect(screen.getByRole('group', { name: 'Effective runtime scaling policy' })).toHaveTextContent('1-2 replicas')
+  })
+
+  it('pauses playback while demonstrating an app-policy change in place', () => {
+    vi.useFakeTimers()
+    render(<App />)
+    selectScenario('latest')
+    fireEvent.click(screen.getByRole('button', { name: 'Run flow' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Apply 2-5 replicas' }))
+    act(() => vi.advanceTimersByTime(10000))
+    expect(screen.getByRole('button', { name: 'Go to stage 1: Choose source' })).toHaveAttribute('aria-current', 'step')
+    expect(screen.getByRole('button', { name: 'Run flow' })).toBeEnabled()
+    expect(screen.getByRole('group', { name: 'Effective runtime scaling policy' })).toHaveTextContent('2-5 replicas')
+    expect(screen.getByRole('group', { name: 'Release version snapshot' })).toHaveAttribute('data-captured', 'false')
   })
 })
 

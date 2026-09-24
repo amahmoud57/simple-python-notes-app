@@ -8,8 +8,47 @@ import {
   nodes,
   scenarios,
 } from './model'
-import { getOverviewMilestones, getOverviewState } from './overview'
-import { configurationSteps, getConfigurationDocuments, getConfigurationState } from './configuration'
+import { getOverviewMilestones, getOverviewReleaseConfiguration, getOverviewState } from './overview'
+import { configurationSteps, getAppPolicyExample, getConfigurationDocuments, getConfigurationState } from './configuration'
+
+describe('unified overview configuration', () => {
+  it('captures version configuration with source before building and changes the live value only at cutover', () => {
+    const scenario = getScenario('latest')
+    const captureIndex = scenario.steps.findIndex((step) => step.id === 'create-version')
+    const routeIndex = scenario.steps.findIndex((step) => step.cutoverAfter === 'switched')
+    expect(getOverviewReleaseConfiguration(scenario, captureIndex).captured).toBe(false)
+    expect(getOverviewReleaseConfiguration(scenario, captureIndex + 1).captured).toBe(true)
+    const waiting = getOverviewReleaseConfiguration(scenario, routeIndex)
+    expect(waiting.desired.variables[0].value).toBe('EUR')
+    expect(waiting.release.variables[0].value).toBe('EUR')
+    expect(waiting.active?.variables[0].value).toBe('USD')
+    expect(getOverviewReleaseConfiguration(scenario, routeIndex + 1).active?.variables[0].value).toBe('EUR')
+  })
+
+  it('keeps retained configuration separate from desired edits and current app policy', () => {
+    const scenario = getScenario('activate')
+    const restored = getOverviewReleaseConfiguration(scenario, scenario.steps.length)
+    expect(restored.retained).toBe(true)
+    expect(restored.captured).toBe(true)
+    expect(restored.desired.variables[0].value).toBe('EUR')
+    expect(restored.active?.variables[0].value).toBe('USD')
+    expect(restored.release).not.toHaveProperty('scaling')
+    expect(getAppPolicyExample('updated').effective.components[0].maxReplicas).toBe(5)
+  })
+
+  it('shows policy application as pending without changing version configuration', () => {
+    const scenario = getScenario('manual')
+    const release = getOverviewReleaseConfiguration(scenario, 0)
+    expect(release.active).toBeNull()
+    const pending = getAppPolicyExample('pending')
+    expect(pending.desired.components[0].maxReplicas).toBe(5)
+    expect(pending.effective.components[0].maxReplicas).toBe(2)
+    expect(pending.pending).toBe(true)
+    const applied = getAppPolicyExample('updated')
+    expect(applied.effective).toEqual(applied.desired)
+    expect(getOverviewReleaseConfiguration(scenario, 0)).toEqual(release)
+  })
+})
 
 describe('configuration lifecycles', () => {
   it('edits desired configuration without changing the active version or creating a snapshot', () => {

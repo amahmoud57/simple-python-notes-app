@@ -76,7 +76,8 @@ not live telemetry or controls that mutate the stamp.
 
 ### Verification Results
 
-- 88 Vitest tests pass, including configuration lifecycles and technical map-fit tests.
+- 93 Vitest tests pass, including the unified Overview, configuration lifecycles,
+  and technical map-fit tests.
 - TypeScript/Vite production build and Oxlint pass.
 - Playwright verified all five journeys, health-before-traffic ordering, release
   success before cleanup, view switching, keyboard navigation, and pause.
@@ -101,7 +102,7 @@ before deploying. Do not modify Embr platform services or unrelated demo apps.
 
 ## Configuration Story
 
-Status: Implemented, 2026-09-23.
+Status: Technical walkthrough retained; Overview superseded by the unified design below.
 
 Add a shared Deployment / Configuration story selector to both Overview and Technical.
 Keep existing deployment scenarios and map-fit controls. Configuration is illustrative
@@ -168,3 +169,38 @@ keyboard navigation; reduced motion; zero axe violations with the inspector open
 Alternative: inline configuration badges on every deployment node are smaller, but do
 not demonstrate what editing, capture, and rollback do. A separate static reference
 table is easy to scan but would lose the interactive lifecycle story.
+
+## Unified Overview
+
+User-directed redesign, 2026-09-24: Overview must be one cohesive canvas, with no
+Deployment / Configuration menu. Keep the separate detailed walkthrough in Technical.
+
+Overview has one deployment scenario selector and shared playback. Three unframed
+areas show release inputs, build/delivery, and the running app. Desired version
+configuration is captured alongside source and visibly travels with the release.
+The running app shows its active version and frozen values. A compact app-policy
+path connects scaling directly to the runtime rather than through an AppVersion.
+One inline scaling command demonstrates pending/applying policy without advancing
+the deployment, creating a version, or rebuilding. Applied policy survives scenario
+changes and version activation. The preview and illustrative-data boundary remains.
+
+Keep the OCI/ACR/ADC handoffs, health gate, static output route, customer traffic,
+and cleanup visible with short labels. Reduce repeated headings, prose, controls,
+and navigation. The current operation has one concise caption. Laptop-first fit
+and responsive vertical flow remain required, as do keyboard and reduced-motion support.
+
+Old Overview configuration links resolve to the unified Overview, not a hidden
+second page. Technical configuration links remain supported. Switching away from
+Overview cancels deployment animation; policy application remains app-owned.
+
+Local check: projection tests must prove that configuration is captured before
+build, the active value changes only with route cutover, retained-version activation
+does not copy desired edits, and app-policy updates do not change deployment progress.
+Browser checks must show both configuration scopes and the release flow together
+without clipping at laptop sizes, with no Overview story selector.
+
+Implemented checks: all five scenarios at 320, 390, 768, 1024, 1280, and 1440px;
+inline scaling leaves the release stationary and persists through retained-version
+activation; old Overview configuration links resolve to the combined canvas.
+Keyboard navigation, payload motion, reduced motion, and Overview axe audits pass.
+Technical map fit and its dedicated configuration walkthrough remain functional.

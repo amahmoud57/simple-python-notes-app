@@ -1,4 +1,5 @@
 import { getCutoverState, type Scenario } from './model'
+import { versionConfiguration } from './configuration'
 
 export interface OverviewMilestone {
   id: 'select' | 'build' | 'publish' | 'artifact' | 'candidate' | 'check' | 'release' | 'verify' | 'cleanup'
@@ -183,5 +184,23 @@ export function getOverviewState(scenario: Scenario, completedCount: number) {
     healthy: completedCount >= milestones.find((milestone) => milestone.id === 'check')!.end,
     nextCount: milestones[milestoneIndex].end,
     previousCount: milestones.map((milestone) => milestone.start).findLast((start) => start < completedCount) ?? 0,
+  }
+}
+
+export function getOverviewReleaseConfiguration(scenario: Scenario, completedCount: number) {
+  const state = getOverviewState(scenario, completedCount)
+  const retained = !scenario.steps.some((step) => step.phase === 'building')
+  const captured = retained || scenario.steps.slice(0, completedCount).some((step) => step.id === 'create-version')
+  const releaseCurrency = scenario.id === 'activate' ? 'USD' : 'EUR'
+  const previousCurrency = scenario.id === 'latest' ? 'USD' : 'EUR'
+
+  return {
+    retained,
+    captured,
+    desired: versionConfiguration('EUR'),
+    release: versionConfiguration(releaseCurrency),
+    active: state.candidateServing
+      ? versionConfiguration(releaseCurrency)
+      : scenario.hasExistingRuntime ? versionConfiguration(previousCurrency) : null,
   }
 }

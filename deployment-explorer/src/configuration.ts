@@ -22,12 +22,22 @@ export const configurationSteps = [
   { id: 'restore', label: 'Activate v1', title: 'Restore the version, not old app settings.', summary: 'A new deployment reuses v1 and USD. The current scaling policy stays in effect.', focus: 'restore' },
 ] as const
 
-function versionConfiguration(currency: string): VersionConfiguration {
+export function versionConfiguration(currency: string): VersionConfiguration {
   return { variables: [{ name: 'CURRENCY', value: currency }], components: [{ name: 'api' }] }
 }
 
 function scalingPolicy(updated: boolean): ScalingPolicy {
   return { components: [{ name: 'api', minReplicas: updated ? 2 : 1, maxReplicas: updated ? 5 : 2, cpuUtilizationPercent: updated ? 60 : 70 }] }
+}
+
+export type AppPolicyPhase = 'baseline' | 'pending' | 'updated'
+
+export function getAppPolicyExample(phase: AppPolicyPhase) {
+  return {
+    desired: scalingPolicy(phase !== 'baseline'),
+    effective: scalingPolicy(phase === 'updated'),
+    pending: phase === 'pending',
+  }
 }
 
 export function getConfigurationState(position: number) {

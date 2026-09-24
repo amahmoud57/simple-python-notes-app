@@ -26,20 +26,21 @@ import {
   type Scenario,
 } from './model'
 import { getOverviewState } from './overview'
-import { configurationSteps, getConfigurationState } from './configuration'
+import { configurationSteps, getConfigurationState, type AppPolicyPhase } from './configuration'
 
 const transferDurationMs = 2500
 const readingPauseMs = 1200
 type ExplorerView = 'overview' | 'technical'
 type ExplorerStory = 'deployment' | 'configuration'
 const readView = (): ExplorerView => window.location.hash.split('/')[0] === '#technical' ? 'technical' : 'overview'
-const readStory = (): ExplorerStory => window.location.hash.split('/')[1] === 'configuration' ? 'configuration' : 'deployment'
-const storyHash = (view: ExplorerView, story: ExplorerStory) => `#${view}${story === 'configuration' ? '/configuration' : ''}`
+const readStory = (): ExplorerStory => readView() === 'technical' && window.location.hash.split('/')[1] === 'configuration' ? 'configuration' : 'deployment'
+const storyHash = (view: ExplorerView, story: ExplorerStory) => `#${view}${view === 'technical' && story === 'configuration' ? '/configuration' : ''}`
 
 function App() {
   const [view, setView] = useState<ExplorerView>(readView)
   const [story, setStory] = useState<ExplorerStory>(readStory)
   const [configurationPosition, setConfigurationPosition] = useState(0)
+  const [appPolicyPhase, setAppPolicyPhase] = useState<AppPolicyPhase>('baseline')
   const [scenarioId, setScenarioId] = useState<Scenario['id']>('manual')
   const [completedCount, setCompletedCount] = useState(0)
   const [isPlaying, setIsPlaying] = useState(false)
@@ -49,7 +50,7 @@ function App() {
   const [selectedNode, setSelectedNode] = useState<NodeId | null>(null)
   const scenario = getScenario(scenarioId)
   const configuration = getConfigurationState(configurationPosition)
-  const isConfiguration = story === 'configuration'
+  const isConfiguration = view === 'technical' && story === 'configuration'
   const position = isConfiguration ? configurationPosition : completedCount
   const usesStages = isConfiguration || view === 'overview'
   const activeStep = scenario.steps[completedCount]
@@ -57,6 +58,12 @@ function App() {
   const cutover = getCutoverState(scenario, completedCount, isAnimating ? activeStep : undefined)
   const overview = getOverviewState(scenario, completedCount)
   const motionDurationMs = (usesStages ? 3200 : transferDurationMs) / speed
+
+  useEffect(() => {
+    if (appPolicyPhase !== 'pending') return
+    const timer = window.setTimeout(() => setAppPolicyPhase('updated'), 1600)
+    return () => window.clearTimeout(timer)
+  }, [appPolicyPhase])
 
   useEffect(() => {
     const onLocationChange = () => {
@@ -183,7 +190,7 @@ function App() {
         : 'Ready'
 
   return (
-    <div className={`app-shell view-${view} story-${story}`}>
+    <div className={`app-shell view-${view} story-${isConfiguration ? 'configuration' : 'deployment'}`}>
       <header className="app-header">
         <div className="brand">
           <span className="brand-mark" aria-hidden="true"><i /><i /><i /></span>
@@ -192,7 +199,7 @@ function App() {
             <h1>Deployment Explorer</h1>
           </div>
         </div>
-        <div className="story-switcher" role="tablist" aria-label="Explorer story">
+        {view === 'technical' && <div className="story-switcher" role="tablist" aria-label="Explorer story">
           {(['deployment', 'configuration'] as const).map((item, index) => (
             <button key={item} type="button" role="tab" id={`${item}-tab`} aria-controls={`${item}-story`} aria-selected={story === item} tabIndex={story === item ? 0 : -1} onClick={() => selectStory(item)} onKeyDown={(event) => {
               const target = event.key === 'Home' ? 0 : event.key === 'End' ? 1 : event.key === 'ArrowRight' || event.key === 'ArrowLeft' ? 1 - index : null
@@ -202,7 +209,7 @@ function App() {
               event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[target].focus()
             }}>{item === 'deployment' ? <Workflow size={16} aria-hidden="true" /> : <Settings2 size={16} aria-hidden="true" />}{item === 'deployment' ? 'Deployment flow' : 'Configuration'}</button>
           ))}
-        </div>
+        </div>}
         <div className="view-switcher" role="tablist" aria-label="Explorer view">
           {(['overview', 'technical'] as const).map((item, index) => (
             <button
@@ -239,10 +246,14 @@ function App() {
 
       <main className="explorer-main">
       <div className="command-bar">
+        {view === 'overview' ? (
+          <label className="overview-flow-picker"><span>Deployment flow</span><select aria-label="Deployment scenario" value={scenario.id} onChange={(event) => selectScenario(getScenario(event.target.value as Scenario['id']))}>{scenarios.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+        ) : (
         <div className="scenario-title">
-          <span>{isConfiguration ? 'Configuration lifecycle' : view === 'overview' ? 'Selected flow' : scenario.label}</span>
-          <strong>{isConfiguration ? configuration.step.label : view === 'overview' ? scenario.label : scenario.title}</strong>
+          <span>{isConfiguration ? 'Configuration lifecycle' : scenario.label}</span>
+          <strong>{isConfiguration ? configuration.step.label : scenario.title}</strong>
         </div>
+        )}
         <div className="playback-controls">
           <button type="button" className="icon-button" onClick={reset} aria-label={isConfiguration ? 'Reset configuration story' : 'Reset deployment flow'} title="Reset">
             <RotateCcw size={18} />
@@ -275,7 +286,7 @@ function App() {
         </div>
       </div>
 
-      <div id={`${story}-story`} className="story-content" role="tabpanel" aria-labelledby={`${story}-tab`}>
+      <div id={`${view === 'overview' ? 'overview' : story}-story`} className="story-content" role={view === 'technical' ? 'tabpanel' : undefined} aria-labelledby={view === 'technical' ? `${story}-tab` : undefined}>
       {isConfiguration ? (
         <ConfigurationStory view={view} position={configurationPosition} isAnimating={isAnimating} motionDurationMs={motionDurationMs} onStepSelect={(index) => { pause(); setConfigurationPosition(index) }} />
       ) : view === 'overview' ? (
@@ -284,9 +295,11 @@ function App() {
           completedCount={completedCount}
           isAnimating={isAnimating}
           motionDurationMs={motionDurationMs}
-          onScenarioChange={selectScenario}
+          appPolicyPhase={appPolicyPhase}
+          onApplyPolicy={() => { pause(); setAppPolicyPhase('pending') }}
+          onResetPolicy={() => setAppPolicyPhase('baseline')}
           onMilestoneSelect={selectStep}
-          onTechnicalView={() => selectView('technical')}
+          onTechnicalView={() => { setStory('deployment'); pause(); setView('technical'); window.history.pushState(null, '', '#technical') }}
         />
       ) : (
       <div id="technical-panel" className="workspace" role="tabpanel" aria-labelledby="technical-tab">
