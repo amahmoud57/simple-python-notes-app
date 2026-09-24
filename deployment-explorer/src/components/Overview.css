@@ -20,6 +20,11 @@ body:has(.view-overview),
 .view-overview { --inspector-width: clamp(340px, 26vw, 420px); }
 @media (min-width: 900px) {
   .view-overview.has-inspector .overview { padding-right: calc(var(--inspector-width) + 18px); }
+  .view-overview.has-inspector .app-header,
+  .view-overview.has-inspector .command-bar { padding-right: calc(var(--inspector-width) + 20px); }
+  .view-overview.has-inspector .command-bar { flex-wrap: wrap; row-gap: 8px; }
+  .view-overview.has-inspector .command-preview > span { white-space: normal; }
+  .view-overview.has-inspector .control-noun { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
   .view-overview .detail-drawer { width: var(--inspector-width); }
 }
 

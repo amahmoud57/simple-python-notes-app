@@ -203,6 +203,15 @@ describe('Deployment Overview', () => {
     expect(label('Builder App')).toBe('v1 live')
   })
 
+  it('keeps stepping stages while the Deployment inspector stays open', () => {
+    const { container } = render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect Deployment: Creating' }))
+    expect(container.querySelector('.app-shell')).toHaveClass('has-inspector')
+    fireEvent.click(screen.getByRole('button', { name: 'Next stage' }))
+    expect(screen.getByRole('complementary', { name: 'Deployment' })).toBeInTheDocument()
+    expect(JSON.parse(container.querySelector('.detail-code code')?.textContent ?? '{}')).toMatchObject({ status: 'building' })
+  })
+
   it('carries the commit and frozen config into the AppVersion, then image and scaling into the new app', () => {
     vi.useFakeTimers()
     const { container } = render(<App />)

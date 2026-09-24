@@ -76,7 +76,7 @@ not live telemetry or controls that mutate the stamp.
 
 ### Verification Results
 
-- 94 Vitest tests pass, covering commands and Deployment actions, the shared CLI timeline,
+- 95 Vitest tests pass, covering commands and Deployment actions, the shared CLI timeline,
   both configuration lifecycles, the `builder.yaml` contract, per-component build order, Deployment
   document timing and status per stage, the Builder App ARM view, every deploy journey, Overview
   JSON inspection, playback, and Technical map fit.
@@ -87,7 +87,8 @@ not live telemetry or controls that mutate the stamp.
 - No clipped content or horizontal overflow at 390, 1024, 1280, 1366, and 1440px;
   1280x720, 1366x768, and 1440x900 fit without vertical scrolling. Every command is fully
   visible at 1280 and 1366px. With the inspector open, the map stays a canvas beside it at 1280
-  and 1366px and every element remains clickable.
+  and 1366px, every element remains clickable, and the command bar and playback controls stay
+  clear of the inspector from 900px up.
 - Reduced motion hides payloads and stops line motion. Axe reports no violations in 8
   Overview states and 8 inspector targets at 390, 1280, and 1366px.
 
