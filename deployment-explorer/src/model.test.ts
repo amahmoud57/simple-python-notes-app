@@ -7,118 +7,98 @@ import {
   getScenario,
   nodes,
   scenarios,
+  type Scenario,
 } from './model'
-import { getOverviewMilestones, getOverviewReleaseConfiguration, getOverviewState } from './overview'
-import { configurationSteps, getAppPolicyExample, getConfigurationDocuments, getConfigurationState } from './configuration'
+import { getOverviewMilestones, getOverviewState } from './overview'
+import { baseScaling, getConfigurationState, updatedScaling, versionHost } from './configuration'
 
-describe('unified overview configuration', () => {
-  it('captures version configuration with source before building and changes the live value only at cutover', () => {
-    const scenario = getScenario('latest')
-    const captureIndex = scenario.steps.findIndex((step) => step.id === 'create-version')
-    const routeIndex = scenario.steps.findIndex((step) => step.cutoverAfter === 'switched')
-    expect(getOverviewReleaseConfiguration(scenario, captureIndex).captured).toBe(false)
-    expect(getOverviewReleaseConfiguration(scenario, captureIndex + 1).captured).toBe(true)
-    const waiting = getOverviewReleaseConfiguration(scenario, routeIndex)
-    expect(waiting.desired.variables[0].value).toBe('EUR')
-    expect(waiting.release.variables[0].value).toBe('EUR')
-    expect(waiting.active?.variables[0].value).toBe('USD')
-    expect(getOverviewReleaseConfiguration(scenario, routeIndex + 1).active?.variables[0].value).toBe('EUR')
-  })
-
-  it('keeps retained configuration separate from desired edits and current app policy', () => {
-    const scenario = getScenario('activate')
-    const restored = getOverviewReleaseConfiguration(scenario, scenario.steps.length)
-    expect(restored.retained).toBe(true)
-    expect(restored.captured).toBe(true)
-    expect(restored.desired.variables[0].value).toBe('EUR')
-    expect(restored.active?.variables[0].value).toBe('USD')
-    expect(restored.release).not.toHaveProperty('scaling')
-    expect(getAppPolicyExample('updated').effective.components[0].maxReplicas).toBe(5)
-  })
-
-  it('shows policy application as pending without changing version configuration', () => {
-    const scenario = getScenario('manual')
-    const release = getOverviewReleaseConfiguration(scenario, 0)
-    expect(release.active).toBeNull()
-    const pending = getAppPolicyExample('pending')
-    expect(pending.desired.components[0].maxReplicas).toBe(5)
-    expect(pending.effective.components[0].maxReplicas).toBe(2)
-    expect(pending.pending).toBe(true)
-    const applied = getAppPolicyExample('updated')
-    expect(applied.effective).toEqual(applied.desired)
-    expect(getOverviewReleaseConfiguration(scenario, 0)).toEqual(release)
-  })
-})
+const deployScenarios = scenarios.filter((scenario) => scenario.kind === 'deploy')
+const countAfter = (scenario: Scenario, id: string) => scenario.steps.findIndex((step) => step.id === id) + 1
+const cpuScale = (min: number, max: number, cpu: number) => ({ minReplicas: min, maxReplicas: max, rules: [{ name: 'cpu', type: 'cpu', metadata: { type: 'Utilization', value: String(cpu) } }] })
 
 describe('configuration lifecycles', () => {
-  it('edits desired configuration without changing the active version or creating a snapshot', () => {
-    const edited = getConfigurationState(1)
-    expect(edited.desired.variables[0].value).toBe('EUR')
-    expect(edited.activeVersion.configuration.variables[0].value).toBe('USD')
-    expect(edited.versions).toHaveLength(1)
-    expect(edited.desiredDiffers).toBe(true)
+  it('freezes the desired API_URL into the new AppVersion while the live version keeps its own', () => {
+    const scenario = getScenario('latest')
+    const state = getConfigurationState(scenario, 0)
+    expect(state).toMatchObject({ desiredUse: 'captured', desiredHost: 'api.contoso.com', liveHost: 'legacy.contoso.com', nextHost: 'api.contoso.com' })
+    const created = JSON.parse(getNodeExample('version', scenario, countAfter(scenario, 'create-version'), 'existing').body)
+    expect(created.configuration.variables).toEqual([{ name: 'API_URL', value: 'https://api.contoso.com' }])
+    expect(created.configuration).not.toHaveProperty('scaling')
+    const app = JSON.parse(getNodeExample('app', scenario, 0, 'existing').body)
+    expect(app.runtime.versionConfiguration.variables[0].value).toBe('https://legacy.contoso.com')
+    expect(app.scaling).toEqual({ components: [{ name: 'api', ...baseScaling }] })
   })
 
-  it('captures v2 before activation, then runs its own frozen configuration', () => {
-    const captured = getConfigurationState(2)
-    expect(captured.versions.map((version) => version.configuration.variables[0].value)).toEqual(['USD', 'EUR'])
-    expect(captured.activeVersion.id).toBe('v1')
-    const deployed = getConfigurationState(3)
-    expect(deployed.activeVersion.id).toBe('v2')
-    expect(deployed.activeVersion.configuration.variables[0].value).toBe('EUR')
-    expect(deployed.scaling).toEqual(captured.scaling)
-    expect(deployed.desiredDiffers).toBe(false)
+  it('reuses a retained version only with matching config and restores its own config on activation', () => {
+    expect(getConfigurationState(getScenario('commit'), 0).desiredUse).toBe('matched')
+    expect(getConfigurationState(getScenario('redeploy'), 0).desiredUse).toBe('unused')
+    const scenario = getScenario('activate')
+    const restored = getConfigurationState(scenario, scenario.steps.length)
+    expect(restored).toMatchObject({ desiredUse: 'unused', desiredHost: 'api.contoso.com', nextHost: 'legacy.contoso.com', scaling: baseScaling })
+    const app = JSON.parse(getNodeExample('app', scenario, scenario.steps.length, 'deleted').body)
+    expect(app.versionConfiguration.variables[0].value).toBe('https://api.contoso.com')
+    expect(app.runtime.versionConfiguration.variables[0].value).toBe('https://legacy.contoso.com')
+    expect(app.scaling).toEqual({ components: [{ name: 'api', ...baseScaling }] })
   })
 
-  it('applies app policy independently without changing versions or the deployment', () => {
-    const deployed = getConfigurationState(3)
-    const pending = getConfigurationState(4)
-    const applied = getConfigurationState(5)
-    expect(pending.policyPending).toBe(true)
-    expect(pending.scaling.components[0].maxReplicas).toBe(5)
-    expect(pending.appliedScaling.components[0].maxReplicas).toBe(2)
-    expect(applied.policyPending).toBe(false)
-    expect(applied.appliedScaling).toEqual(applied.scaling)
-    expect(applied.versions).toEqual(deployed.versions)
-    expect(applied.activeVersion).toEqual(deployed.activeVersion)
-    expect(applied.deploymentId).toBe(deployed.deploymentId)
+  it.each(deployScenarios)('starts the $id Artifact App from frozen variables plus current scaling', (scenario) => {
+    const candidateStep = scenario.steps.find((step) => step.cutoverDuring === 'candidate')!
+    expect(candidateStep.payload).toContain('frozen')
+    expect(candidateStep.payload).toContain('current app scaling')
+    expect(candidateStep.reason).toContain('current scaling policy')
+    const candidate = JSON.parse(getNodeExample('candidate', scenario, scenario.steps.length, 'active').body)
+    expect(candidate.properties.configuration.env).toEqual([{ name: 'API_URL', secretRef: 'env-0' }])
+    expect(candidate.properties.scale).toEqual(cpuScale(1, 3, 70))
+    expect(candidate.properties.configurationSources).toEqual({ environment: `AppVersion ${scenario.appVersionId} (frozen)`, scale: 'BuilderApp.scaling (current)' })
   })
 
-  it('restores the retained version snapshot without rewinding app policy or desired config', () => {
-    const before = getConfigurationState(5)
-    const restored = getConfigurationState(6)
-    expect(restored.activeVersion.id).toBe('v1')
-    expect(restored.activeVersion.configuration.variables[0].value).toBe('USD')
-    expect(restored.desired.variables[0].value).toBe('EUR')
-    expect(restored.scaling).toEqual(before.scaling)
-    expect(restored.appliedScaling).toEqual(before.appliedScaling)
-    expect(restored.versions).toEqual(before.versions)
-    expect(restored.deploymentId).not.toBe(before.deploymentId)
+  it('saves version config for the next AppVersion without a version, Deployment, or provider call', () => {
+    const scenario = getScenario('config')
+    expect(scenario.kind).toBe('config')
+    expect(scenario.steps.map((step) => step.target)).toEqual(['arm', 'regional', 'app'])
+    expect(getConfigurationState(scenario, 0)).toMatchObject({ desiredHost: 'legacy.contoso.com', previousDesiredHost: null })
+    const saved = getConfigurationState(scenario, scenario.steps.length)
+    expect(saved).toMatchObject({ desiredHost: 'api.contoso.com', previousDesiredHost: 'legacy.contoso.com', liveHost: 'legacy.contoso.com', nextHost: null })
+    const arm = getNodeExample('arm', scenario, scenario.steps.length, 'existing').body
+    const response = JSON.parse(arm.slice(arm.indexOf('200 OK') + 7))
+    expect(response.properties.versionConfiguration.variables).toEqual([{ name: 'API_URL' }])
+    expect(getNodeExample('arm', scenario, 0, 'existing').body).toContain('Waiting for Regional')
+    const app = JSON.parse(getNodeExample('app', scenario, scenario.steps.length, 'existing').body)
+    expect(app.versionConfiguration.variables[0].value).toBe('https://api.contoso.com')
+    expect(app.runtime).toMatchObject({ activeAppVersionId: 'ver_16', versionConfiguration: { variables: [{ name: 'API_URL', value: 'https://legacy.contoso.com' }] } })
+    expect(JSON.parse(getNodeExample('deployment', scenario, scenario.steps.length, 'existing').body).created).toBe(false)
+    expect(JSON.parse(getNodeExample('candidate', scenario, scenario.steps.length, 'existing').body).created).toBe(false)
   })
 
-  it.each(configurationSteps.map((step, index) => ({ ...step, index })))('keeps $id technical documents consistent with the visual state', ({ index }) => {
-    const state = getConfigurationState(index)
-    const documents = getConfigurationDocuments(index)
-    expect(documents.app.versionConfiguration).toEqual(state.desired)
-    expect(documents.app.scaling).toEqual(state.scaling)
-    expect(documents.app.runtime.versionConfiguration).toEqual(state.activeVersion.configuration)
-    expect(documents.versions.find((version) => version.id === state.activeVersion.id)?.configuration).toEqual(state.activeVersion.configuration)
-    expect(documents.versions.every((version) => !('scaling' in version.configuration))).toBe(true)
+  it('saves scaling, then updates the running Artifact App in place without a new version or route change', () => {
+    const scenario = getScenario('scale')
+    const saved = getConfigurationState(scenario, countAfter(scenario, 'scale-persist'))
+    expect(saved).toMatchObject({ scaling: updatedScaling, previousScaling: baseScaling, liveScaling: baseScaling })
+    const applied = getConfigurationState(scenario, scenario.steps.length)
+    expect(applied).toMatchObject({ scaling: updatedScaling, liveScaling: updatedScaling, liveHost: 'api.contoso.com' })
+    expect(scenario.steps.at(-1)).toMatchObject({ id: 'scale-apply', source: 'regional', target: 'existing', executionSurface: 'armApi' })
+    expect(scenario.steps.find((step) => step.id === 'scale-load-active')?.api).toContain('ArtifactAppCandidateRequestFactory.Create(version, scaling)')
+    expect(scenario.steps.some((step) => ['candidate', 'deployment', 'build', 'route'].includes(step.target))).toBe(false)
+    expect(scenario.steps.every((step) => step.cutoverAfter === undefined && step.cutoverDuring === undefined)).toBe(true)
+    expect(getCutoverState(scenario, scenario.steps.length)).toBe('existing')
+    const before = JSON.parse(getNodeExample('existing', scenario, countAfter(scenario, 'scale-persist'), 'existing').body)
+    const after = JSON.parse(getNodeExample('existing', scenario, scenario.steps.length, 'existing').body)
+    expect(before.scale).toEqual(cpuScale(1, 3, 70))
+    expect(after.scale).toEqual(cpuScale(2, 6, 60))
+    expect(after.configuration).toEqual(before.configuration)
+    expect(JSON.parse(getNodeExample('app', scenario, scenario.steps.length, 'existing').body).scaling).toEqual({ components: [{ name: 'api', ...updatedScaling }] })
   })
 
-  it('returns isolated example snapshots and clamps navigation to the story bounds', () => {
-    const initial = getConfigurationState(0)
-    initial.desired.variables[0].value = 'CHANGED'
-    expect(initial.activeVersion.configuration.variables[0].value).toBe('USD')
-    expect(getConfigurationState(0).desired.variables[0].value).toBe('USD')
-    expect(getConfigurationState(-1).index).toBe(0)
-    expect(getConfigurationState(Number.NaN).index).toBe(0)
-    expect(getConfigurationState(100).complete).toBe(true)
+  it('maps each illustrative version to the API_URL it froze', () => {
+    expect(versionHost('v16')).toBe('legacy.contoso.com')
+    expect(versionHost('v17-b')).toBe('api.contoso.com')
+    expect(versionHost('v1')).toBe('api.contoso.com')
+    expect(versionHost(null)).toBeNull()
   })
 })
 
 describe('deployment overview', () => {
-  it.each(scenarios)('covers every $id step once with visible build, registry, runtime, and routing handoffs', (scenario) => {
+  it.each(deployScenarios)('covers every $id step once with visible build, registry, runtime, and routing handoffs', (scenario) => {
     const milestones = getOverviewMilestones(scenario)
     const builds = scenario.id === 'manual' || scenario.id === 'latest'
     expect(milestones.map((milestone) => milestone.id)).toEqual(['select', ...(builds ? ['build'] : []), 'publish', 'artifact', 'candidate', 'check', 'release', 'verify', 'cleanup'])
@@ -133,7 +113,7 @@ describe('deployment overview', () => {
     expect(scenario.steps.slice(byId('cleanup').start).every((step) => step.phase === 'postCleanup')).toBe(true)
   })
 
-  it.each(scenarios)('preserves $id traffic at every technical step and overview boundary', (scenario) => {
+  it.each(deployScenarios)('preserves $id traffic at every technical step and overview boundary', (scenario) => {
     const switchIndex = scenario.steps.findIndex((step) => step.cutoverAfter === 'switched')
     for (let count = 0; count <= scenario.steps.length; count += 1) {
       const state = getOverviewState(scenario, count)
@@ -161,11 +141,11 @@ describe('deployment overview', () => {
 
   it('distinguishes fresh builds from retained-output reuse and release success from cleanup', () => {
     for (const id of ['manual', 'latest'] as const) {
-      expect(getOverviewMilestones(getScenario(id)).find((milestone) => milestone.id === 'publish')?.label).toBe('Package & publish')
+      expect(getOverviewMilestones(getScenario(id)).find((milestone) => milestone.id === 'publish')?.label).toBe('Package')
       expect(getOverviewMilestones(getScenario(id)).some((milestone) => milestone.id === 'build')).toBe(true)
     }
     for (const id of ['commit', 'redeploy', 'activate'] as const) {
-      expect(getOverviewMilestones(getScenario(id))[1].label).toBe('Reuse outputs')
+      expect(getOverviewMilestones(getScenario(id))[1].label).toBe('Reuse')
     }
     const scenario = getScenario('latest')
     const afterRelease = getOverviewState(scenario, getOverviewMilestones(scenario).find((milestone) => milestone.id === 'verify')!.end)
@@ -182,6 +162,17 @@ describe('deployment overview', () => {
 
   it('rejects an incomplete scenario instead of inventing a release boundary', () => {
     expect(() => getOverviewMilestones({ ...getScenario('manual'), steps: [] })).toThrow('ordered overview journey')
+    expect(() => getOverviewMilestones({ ...getScenario('scale'), steps: [] })).toThrow('ordered overview journey')
+  })
+
+  it('stages settings changes without any deployment milestone', () => {
+    const config = getOverviewMilestones(getScenario('config'))
+    const scale = getOverviewMilestones(getScenario('scale'))
+    expect(config.map((milestone) => milestone.id)).toEqual(['save'])
+    expect(scale.map((milestone) => milestone.id)).toEqual(['save', 'apply'])
+    expect(scale[0].end).toBe(countAfter(getScenario('scale'), 'scale-persist'))
+    expect(getOverviewState(getScenario('scale'), 0).released).toBe(false)
+    expect(getOverviewState(getScenario('config'), 3).completion.title).toBe('Saved for the next version.')
   })
 })
 
@@ -286,7 +277,7 @@ describe('deployment model', () => {
     expect(nodes.find((node) => node.id === 'version')?.group).toBe('control')
     expect(nodes.find((node) => node.id === 'existing')?.group).toBe('runtime')
 
-    for (const scenario of scenarios) {
+    for (const scenario of deployScenarios) {
       const healthStep = scenario.steps.find((step) => step.id === 'direct-health' || step.id.endsWith('-health'))
       expect(healthStep?.target).toBe('candidate')
 
@@ -521,7 +512,7 @@ describe('deployment model', () => {
   })
 
   it('documents that required authentication skips public route probing', () => {
-    for (const scenario of scenarios) {
+    for (const scenario of deployScenarios) {
       const verificationStep = scenario.steps.find((step) => step.id === 'verify-customer-route' || step.id.endsWith('-verify'))
       expect(verificationStep?.reason).toContain('Required')
       expect(verificationStep?.reason).toContain('skip')
@@ -540,7 +531,9 @@ describe('deployment model', () => {
     expect(version).toContain('"appLifecycleId": "ali_31"')
     expect(app).toContain('"lifecycleId": "ali_31"')
     expect(`${app}${version}`).not.toContain('alc_')
-    expect(getNodeApi('app')).toContain('captured by the next AppVersion')
+    expect(getNodeApi('app')).toContain('frozen into the next AppVersion')
+    expect(getNodeApi('app')).toContain('scaling: current policy')
+    expect(`${app}${version}${deployment}`).not.toMatch(/RELEASE_CHANNEL|CURRENCY/)
   })
 
   it('shows current source authorization and BYO Entra route auth without scope or role requirements', () => {

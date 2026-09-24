@@ -1,39 +1,69 @@
 import { getCutoverState, type Scenario } from './model'
-import { versionConfiguration } from './configuration'
+import { currentApiHost, formatScaling, legacyApiHost, updatedScaling, versionHost } from './configuration'
+
+export type OverviewMilestoneId =
+  | 'select'
+  | 'build'
+  | 'publish'
+  | 'artifact'
+  | 'candidate'
+  | 'check'
+  | 'release'
+  | 'verify'
+  | 'cleanup'
+  | 'save'
+  | 'apply'
 
 export interface OverviewMilestone {
-  id: 'select' | 'build' | 'publish' | 'artifact' | 'candidate' | 'check' | 'release' | 'verify' | 'cleanup'
+  id: OverviewMilestoneId
   label: string
-  station: string
-  context: string
-  handoff: string
-  payload: string
   title: string
   description: string
-  result: string
   start: number
   end: number
 }
 
-export const overviewStories: Record<Scenario['id'], { title: string }> = {
-  manual: {
-    title: 'From source to a running app.',
-  },
-  latest: {
-    title: 'Ship what is next. Keep serving.',
-  },
-  commit: {
-    title: 'Choose exactly what goes live.',
-  },
-  redeploy: {
-    title: 'Fresh runtime. Same version.',
-  },
-  activate: {
-    title: 'Return to a known version.',
-  },
+type MilestoneCopy = Omit<OverviewMilestone, 'start' | 'end'>
+
+const version = (label: string | null) => label?.replace(/-[ab]$/, '') ?? null
+
+function withBoundaries(scenario: Scenario, boundaries: number[], milestones: MilestoneCopy[]): OverviewMilestone[] {
+  if (boundaries.some((boundary, index) => index > 0 && boundary <= boundaries[index - 1])) {
+    throw new Error(`Scenario ${scenario.id} does not contain an ordered overview journey`)
+  }
+  return milestones.map((milestone, index) => ({ ...milestone, start: boundaries[index], end: boundaries[index + 1] }))
+}
+
+function settingsMilestones(scenario: Scenario): OverviewMilestone[] {
+  const step = (id: string) => scenario.steps.findIndex((item) => item.id === id) + 1
+  if (scenario.kind === 'config') {
+    return withBoundaries(scenario, [0, step('config-persist')], [{
+      id: 'save',
+      label: 'Save',
+      title: 'Save API_URL for the next version.',
+      description: `The running v16 keeps ${legacyApiHost}. Nothing is rebuilt or redeployed.`,
+    }])
+  }
+
+  return withBoundaries(scenario, [0, step('scale-persist'), step('scale-apply')], [
+    {
+      id: 'save',
+      label: 'Save',
+      title: 'Save the new scaling.',
+      description: `${formatScaling(updatedScaling)}, stored on the Builder App, not in any AppVersion.`,
+    },
+    {
+      id: 'apply',
+      label: 'Apply live',
+      title: 'Apply it to the running app.',
+      description: 'Embr updates v17 in place: same version, same variables, new scale.',
+    },
+  ])
 }
 
 export function getOverviewMilestones(scenario: Scenario): OverviewMilestone[] {
+  if (scenario.kind !== 'deploy') return settingsMilestones(scenario)
+
   const builds = scenario.steps.some((step) => step.phase === 'building')
   const operationIndex = scenario.steps.findIndex((step) => step.target === 'deployment')
   const builtEnd = scenario.steps.findIndex((step) => step.id === 'build-components') + 1
@@ -44,163 +74,75 @@ export function getOverviewMilestones(scenario: Scenario): OverviewMilestone[] {
   const routeEnd = scenario.steps.findIndex((step) => step.cutoverAfter === 'switched') + 1
   const releaseEnd = scenario.steps.findIndex((step) => step.phase === 'succeeded') + 1
   const boundaries = [0, operationIndex, ...(builds ? [builtEnd] : []), artifactIndex, candidateIndex, nativeReadyEnd, healthyEnd, routeEnd, releaseEnd, scenario.steps.length]
+  const next = version(scenario.newVersion)!
+  const old = version(scenario.oldVersion)
+  const host = versionHost(next)
 
-  if (boundaries.some((boundary, index) => index > 0 && boundary <= boundaries[index - 1])) {
-    throw new Error(`Scenario ${scenario.id} does not contain an ordered overview journey`)
-  }
+  const select: MilestoneCopy = scenario.id === 'commit'
+    ? { id: 'select', label: 'Match', title: `Reuse ${next}: same commit, same config.`, description: `Commit 71ab42d with API_URL=${host} already built ${next}. No build needed.` }
+    : scenario.id === 'redeploy'
+      ? { id: 'select', label: 'Select', title: `Reuse ${next} as it is.`, description: 'Same code and frozen config. Only the runtime will be new.' }
+      : scenario.id === 'activate'
+        ? { id: 'select', label: 'Select', title: `Pick ${next} and its own config.`, description: `${next} froze API_URL=${host}. The app's current config is not used.` }
+        : { id: 'select', label: 'Pin', title: `Freeze code and config into ${next}.`, description: `The commit, builder.yaml, and API_URL=${host} become AppVersion ${next}.` }
 
-  const milestones: Omit<OverviewMilestone, 'start' | 'end'>[] = [
-    {
-      id: 'select',
-      label: builds || scenario.id === 'commit' ? 'Choose source' : 'Choose version',
-      station: builds || scenario.id === 'commit' ? 'Customer GitHub' : 'Embr AppVersion',
-      context: builds || scenario.id === 'commit' ? 'Customer-owned source' : 'Retained build record',
-      handoff: builds || scenario.id === 'commit' ? 'Pin commit' : 'Select version',
-      payload: builds || scenario.id === 'commit' ? 'Pinned commit' : 'Retained version',
-      title: builds || scenario.id === 'commit' ? 'Pin the source.' : 'Select a retained version.',
-      description: builds ? 'Embr pins the customer repo commit, manifest, and configuration in an AppVersion.' : 'Embr selects retained outputs and the version\'s frozen configuration.',
-      result: 'Source and configuration selected.',
-    },
-    ...(builds ? [{
-      id: 'build' as const,
-      label: 'Build',
-      station: 'ADC build sandbox',
-      context: 'Embr-managed build job',
-      handoff: 'Check out commit',
-      payload: 'Source code',
-      title: 'Build the frontend and API.',
-      description: 'Embr checks out the customer commit and builds its components in a temporary ADC sandbox.',
-      result: 'Component builds complete.',
-    }] : []),
-    {
-      id: 'publish',
-      label: builds ? 'Package & publish' : 'Reuse outputs',
-      station: 'Embr ACR',
-      context: 'Embr-owned image registry',
-      handoff: builds ? 'Publish OCI image' : 'Reuse image digest',
-      payload: builds ? 'OCI image' : 'Retained OCI image',
-      title: builds ? 'Package the build into Embr ACR.' : 'Reuse the image in Embr ACR.',
-      description: builds ? 'Embr packages the API as an OCI image in its ACR. Static files go to Embr Blob Storage.' : 'Use the saved digest in Embr ACR and retained static files. No build or push.',
-      result: 'Immutable build outputs ready.',
-    },
-    {
-      id: 'artifact',
-      label: 'Import artifact',
-      station: 'ADC Artifact',
-      context: 'Embr pull identity + AcrPull',
-      handoff: 'ADC pulls OCI',
-      payload: 'Image digest',
-      title: 'ADC pulls from Embr ACR.',
-      description: 'ADC imports the pinned OCI image as an Artifact Version using Embr\'s managed identity with AcrPull.',
-      result: 'ADC Artifact ready.',
-    },
-    {
-      id: 'candidate',
-      label: 'Create app',
-      station: 'ADC Artifact App',
-      context: 'Runs the Artifact Version',
-      handoff: 'Start version',
-      payload: 'Artifact version',
-      title: 'Start an app from the imported version.',
-      description: 'Embr asks ADC to run the ready Artifact Version. The app does not pull directly from ACR.',
-      result: 'Artifact App running; native readiness passed.',
-    },
-    {
-      id: 'check',
-      label: 'Check health',
-      station: 'Embr health check',
-      context: 'Direct ADC app endpoint',
-      handoff: 'HTTPS probe',
-      payload: 'Candidate endpoint',
-      title: 'Check the candidate over HTTPS.',
-      description: 'After ADC readiness, Embr requires HTTP 200 from the candidate\'s direct endpoint. No traffic yet.',
-      result: 'Candidate healthy; traffic has not moved.',
-    },
-    {
-      id: 'release',
-      label: 'Route traffic',
-      station: 'Embr YARP',
-      context: 'Static + compute routing',
-      handoff: 'Switch route',
-      payload: 'Healthy candidate',
-      title: 'Route customers to the new version.',
-      description: 'Embr YARP routes API requests to the ADC Artifact App and static requests to Embr Blob Storage.',
-      result: 'Traffic switched; release verification is next.',
-    },
-    {
-      id: 'verify',
-      label: 'Verify release',
-      station: 'App URL',
-      context: 'Embr-issued hostname',
-      handoff: 'Public probe',
-      payload: 'Customer traffic',
-      title: 'Verify the live release.',
-      description: 'Embr confirms the expected version through the public URL, then marks the release successful.',
-      result: 'Deployment succeeded.',
-    },
-    {
-      id: 'cleanup',
-      label: 'After release',
-      station: 'Cleanup',
-      context: 'Embr background worker',
-      handoff: 'Retire old runtime',
-      payload: 'Previous runtime',
-      title: scenario.hasExistingRuntime ? 'Retire the previous runtime.' : 'Apply version retention.',
-      description: scenario.hasExistingRuntime ? 'Delete the unrouted Artifact App in the background. Keep retained versions for recovery.' : 'Apply version retention in the background. There is no previous Artifact App to delete.',
-      result: 'The new version is serving. Background cleanup is complete.',
-    },
-  ]
+  return withBoundaries(scenario, boundaries, [
+    select,
+    ...(builds ? [{ id: 'build' as const, label: 'Build', title: `Build ${next}.`, description: `A temporary ADC sandbox builds the commit with ${next}'s variables.` }] : []),
+    builds
+      ? { id: 'publish', label: 'Package', title: 'Package the outputs.', description: 'The API becomes an OCI image in Embr ACR. Static files go to Embr Blob.' }
+      : { id: 'publish', label: 'Reuse', title: 'Reuse the built outputs.', description: `${next}'s image is still in Embr ACR and its files in Embr Blob. No build, no push.` },
+    { id: 'artifact', label: 'Import', title: 'ADC pulls the image.', description: 'ADC imports it from Embr ACR using Embr\'s pull identity with AcrPull.' },
+    { id: 'candidate', label: 'Start', title: old ? `Start ${next} next to ${old}.` : `Start ${next}.`, description: `Variables come from ${next}. Scaling comes from the app.` },
+    { id: 'check', label: 'Health', title: `Check ${next}'s health.`, description: old ? `Embr probes ${next} directly. Customers stay on ${old}.` : `Embr probes ${next} directly before any traffic.` },
+    { id: 'release', label: 'Switch', title: `Route customers to ${next}.`, description: old ? `Embr YARP moves traffic from ${old} to ${next}.` : `Embr YARP creates the app URL and routes it to ${next}.` },
+    { id: 'verify', label: 'Verify', title: 'Verify through the app URL.', description: `Embr confirms ${next} answers at the public URL.` },
+    old
+      ? { id: 'cleanup', label: 'Clean up', title: `Retire ${old}'s Artifact App.`, description: `The unrouted app is deleted. AppVersion ${old} stays retained for rollback.` }
+      : { id: 'cleanup', label: 'Clean up', title: 'Apply version retention.', description: 'Background retention runs. There is no previous app to delete.' },
+  ])
+}
 
-  return milestones.map((milestone, index) => ({
-    ...milestone,
-    start: boundaries[index],
-    end: boundaries[index + 1],
-  }))
+const completion: Record<Scenario['id'], { title: string; description: string }> = {
+  manual: { title: 'v1 is live.', description: `Code and API_URL=${currentApiHost} from v1. Scaling from the app.` },
+  latest: { title: 'v17 is live.', description: `v17 brought API_URL=${currentApiHost}. v16 is retained for rollback.` },
+  commit: { title: 'v18 is live.', description: 'Reused without a build: same commit, same config.' },
+  redeploy: { title: 'v17 is live on a fresh runtime.', description: 'Same version and frozen config in a new Artifact App.' },
+  activate: { title: 'v16 is live again.', description: `Its own API_URL=${legacyApiHost} came back. Scaling stayed current.` },
+  config: { title: 'Saved for the next version.', description: `v16 still runs ${legacyApiHost}. The next deploy captures ${currentApiHost}.` },
+  scale: { title: 'v17 now scales 2–6.', description: 'No build, no new version, no traffic switch.' },
 }
 
 export function getOverviewState(scenario: Scenario, completedCount: number) {
   const milestones = getOverviewMilestones(scenario)
-  const oldVersion = scenario.id === 'redeploy' ? 'v17' : scenario.oldVersion
-  const newVersion = scenario.id === 'redeploy' ? 'v17' : scenario.newVersion
+  const oldVersion = version(scenario.oldVersion)
+  const newVersion = version(scenario.newVersion)!
   const complete = completedCount >= scenario.steps.length
   const milestoneIndex = complete
     ? milestones.length - 1
     : milestones.findIndex((milestone) => completedCount < milestone.end)
   const cutover = getCutoverState(scenario, completedCount)
   const candidateServing = ['switched', 'verified', 'active', 'cleanupPending', 'deleting', 'deleted'].includes(cutover)
+  const reached = (id: OverviewMilestoneId) => {
+    const milestone = milestones.find((item) => item.id === id)
+    return milestone !== undefined && completedCount >= milestone.end
+  }
 
   return {
     milestones,
     milestoneIndex,
     milestone: milestones[milestoneIndex],
     complete,
+    completion: completion[scenario.id],
     cutover,
     candidateServing,
     oldVersion,
     newVersion,
     servingVersion: candidateServing ? newVersion : oldVersion,
-    released: completedCount >= milestones.find((milestone) => milestone.id === 'verify')!.end,
-    prepared: completedCount >= milestones.find((milestone) => milestone.id === 'publish')!.end,
-    healthy: completedCount >= milestones.find((milestone) => milestone.id === 'check')!.end,
+    released: reached('verify'),
+    healthy: reached('check'),
+    reached,
     nextCount: milestones[milestoneIndex].end,
     previousCount: milestones.map((milestone) => milestone.start).findLast((start) => start < completedCount) ?? 0,
-  }
-}
-
-export function getOverviewReleaseConfiguration(scenario: Scenario, completedCount: number) {
-  const state = getOverviewState(scenario, completedCount)
-  const retained = !scenario.steps.some((step) => step.phase === 'building')
-  const captured = retained || scenario.steps.slice(0, completedCount).some((step) => step.id === 'create-version')
-  const releaseCurrency = scenario.id === 'activate' ? 'USD' : 'EUR'
-  const previousCurrency = scenario.id === 'latest' ? 'USD' : 'EUR'
-
-  return {
-    retained,
-    captured,
-    desired: versionConfiguration('EUR'),
-    release: versionConfiguration(releaseCurrency),
-    active: state.candidateServing
-      ? versionConfiguration(releaseCurrency)
-      : scenario.hasExistingRuntime ? versionConfiguration(previousCurrency) : null,
   }
 }

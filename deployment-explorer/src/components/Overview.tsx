@@ -1,155 +1,369 @@
-import { useEffect, useRef, type CSSProperties } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import {
   ArrowRight,
   Check,
-  CircleCheck,
   Container,
   Database,
   Files,
-  Gauge,
   GitBranch,
-  Globe,
   Hammer,
+  HeartPulse,
   LockKeyhole,
   PackageOpen,
-  RefreshCw,
-  RotateCcw,
   Route,
   Server,
-  Settings2,
-  ShieldCheck,
-  Trash2,
+  SlidersHorizontal,
   Users,
+  type LucideIcon,
 } from 'lucide-react'
 import { type Scenario } from '../model'
-import { getAppPolicyExample, type AppPolicyPhase } from '../configuration'
-import { getOverviewReleaseConfiguration, getOverviewState, type OverviewMilestone } from '../overview'
+import { formatScaling, getConfigurationState, type ScalingPolicy } from '../configuration'
+import { getOverviewState, type OverviewMilestoneId } from '../overview'
 import './Overview.css'
 
-const stationIcons = { select: GitBranch, build: Hammer, publish: Container, artifact: PackageOpen, candidate: Server, check: ShieldCheck, release: Route, verify: Globe, cleanup: Trash2 }
+const canvasWidth = 1180
+const canvasHeight = 410
+const stackedBelow = 860
+const maxScale = 1.15
+
+type NodeKey = 'source' | 'version' | 'build' | 'acr' | 'blob' | 'artifact' | 'yarp' | 'customers'
+type PathKey = 'source-version' | 'drop-version' | 'version-build' | 'build-acr' | 'build-blob' | 'acr-artifact' | 'artifact-runtime' | 'drop-scaling-new' | 'drop-scaling-live' | 'blob-yarp' | 'customers-yarp' | 'yarp-new' | 'yarp-live'
+type ElementState = 'current' | 'done' | 'upcoming' | 'skipped' | 'unused' | 'idle'
+type SlotState = 'absent' | 'starting' | 'running' | 'healthy' | 'live' | 'old' | 'removing' | 'removed' | 'empty' | 'none'
+
+const nodePoint: Record<NodeKey, { x: number; y: number }> = {
+  source: { x: 80, y: 158 },
+  version: { x: 228, y: 158 },
+  build: { x: 376, y: 158 },
+  acr: { x: 524, y: 158 },
+  artifact: { x: 672, y: 158 },
+  blob: { x: 376, y: 338 },
+  yarp: { x: 922, y: 338 },
+  customers: { x: 1110, y: 338 },
+}
+
+const nodeIcon: Record<NodeKey, LucideIcon> = {
+  source: GitBranch,
+  version: LockKeyhole,
+  build: Hammer,
+  acr: Container,
+  blob: Database,
+  artifact: PackageOpen,
+  yarp: Route,
+  customers: Users,
+}
+
+const paths: Record<PathKey, { d: string; tone: 'version' | 'scaling' | 'traffic'; icon: LucideIcon; label?: { x: number; y: number; anchor?: 'start' | 'middle' } }> = {
+  'source-version': { d: 'M 116 158 H 186', tone: 'version', icon: GitBranch, label: { x: 151, y: 148 } },
+  'drop-version': { d: 'M 228 76 V 129', tone: 'version', icon: LockKeyhole, label: { x: 237, y: 107, anchor: 'start' } },
+  'version-build': { d: 'M 270 158 H 340', tone: 'version', icon: LockKeyhole, label: { x: 305, y: 148 } },
+  'build-acr': { d: 'M 412 158 H 488', tone: 'version', icon: Container, label: { x: 450, y: 148 } },
+  'build-blob': { d: 'M 376 226 V 309', tone: 'version', icon: Files, label: { x: 385, y: 274, anchor: 'start' } },
+  'acr-artifact': { d: 'M 560 158 H 636', tone: 'version', icon: Container, label: { x: 598, y: 148 } },
+  'artifact-runtime': { d: 'M 708 158 H 775', tone: 'version', icon: Server, label: { x: 741, y: 148 } },
+  'drop-scaling-new': { d: 'M 849 76 V 130', tone: 'scaling', icon: SlidersHorizontal, label: { x: 858, y: 101, anchor: 'start' } },
+  'drop-scaling-live': { d: 'M 995 76 V 130', tone: 'scaling', icon: SlidersHorizontal, label: { x: 1004, y: 101, anchor: 'start' } },
+  'blob-yarp': { d: 'M 412 338 H 886', tone: 'traffic', icon: Files },
+  'customers-yarp': { d: 'M 1074 338 H 958', tone: 'traffic', icon: Users, label: { x: 1016, y: 328 } },
+  'yarp-new': { d: 'M 910 311 C 910 290 849 288 849 259', tone: 'traffic', icon: Route },
+  'yarp-live': { d: 'M 934 311 C 934 290 995 288 995 259', tone: 'traffic', icon: Route },
+}
 
 interface OverviewProps {
   scenario: Scenario
   completedCount: number
   isAnimating: boolean
   motionDurationMs: number
-  appPolicyPhase: AppPolicyPhase
-  onApplyPolicy: () => void
-  onResetPolicy: () => void
   onMilestoneSelect: (index: number) => void
   onTechnicalView: () => void
 }
 
-export function Overview({ scenario, completedCount, isAnimating, motionDurationMs, appPolicyPhase, onApplyPolicy, onResetPolicy, onMilestoneSelect, onTechnicalView }: OverviewProps) {
-  const root = useRef<HTMLDivElement>(null)
+export function Overview({ scenario, completedCount, isAnimating, motionDurationMs, onMilestoneSelect, onTechnicalView }: OverviewProps) {
+  const frame = useRef<HTMLDivElement>(null)
+  const [layout, setLayout] = useState<{ mode: 'canvas' | 'stacked'; scale: number }>({ mode: 'canvas', scale: 1 })
   const state = getOverviewState(scenario, completedCount)
-  const configuration = getOverviewReleaseConfiguration(scenario, completedCount)
-  const policy = getAppPolicyExample(appPolicyPhase)
-  const effectiveScale = policy.effective.components[0]
-  const builds = scenario.steps.some((step) => step.phase === 'building')
-  const stations = state.milestones.filter((milestone) => !['select', 'verify', 'cleanup'].includes(milestone.id))
-  const source = state.milestones[0]
-  const verification = state.milestones.find((milestone) => milestone.id === 'verify')!
-  const cleanup = state.milestones.at(-1)!
-  const assetsStored = !builds || scenario.steps.slice(0, completedCount).some((step) => step.id === 'publish-static')
-  const trafficTarget = state.candidateServing ? 'candidate' : scenario.hasExistingRuntime ? 'existing' : 'none'
-  const releaseCurrency = configuration.release.variables[0].value
-  const activeCurrency = configuration.active?.variables[0].value
+  const settings = getConfigurationState(scenario, completedCount)
+  const deploy = scenario.kind === 'deploy'
+  const builds = state.milestones.some((milestone) => milestone.id === 'build')
+  const sourceUsed = builds || scenario.id === 'commit'
+  const current = state.complete ? null : state.milestone.id
+  const has = (id: OverviewMilestoneId) => state.milestones.some((milestone) => milestone.id === id)
+
+  useLayoutEffect(() => {
+    const element = frame.current
+    if (!element) return
+    const update = () => {
+      const width = element.clientWidth
+      if (width <= 0) return
+      const next = width < stackedBelow
+        ? { mode: 'stacked' as const, scale: 1 }
+        : { mode: 'canvas' as const, scale: Math.min(maxScale, width / canvasWidth) }
+      setLayout((previous) => previous.mode === next.mode && Math.abs(previous.scale - next.scale) < 0.001 ? previous : next)
+    }
+    update()
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', update)
+      return () => window.removeEventListener('resize', update)
+    }
+    const observer = new ResizeObserver(update)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
 
   useEffect(() => {
-    if (!isAnimating || !window.matchMedia?.('(max-width: 720px)').matches) return
-    root.current?.querySelector('[aria-current="step"]')?.scrollIntoView({
+    if (!isAnimating || layout.mode !== 'stacked') return
+    frame.current?.querySelector('.state-current')?.scrollIntoView({
       block: 'center',
-      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth',
+      behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth',
     })
-  }, [isAnimating, state.milestone.id])
+  }, [isAnimating, layout.mode, current])
 
-  const stationClass = (milestone: OverviewMilestone) => completedCount >= milestone.end ? 'is-done' : milestone.id === state.milestone.id ? 'is-current' : 'is-upcoming'
-  const stationButton = (milestone: OverviewMilestone) => {
-    const done = completedCount >= milestone.end
-    const active = !state.complete && state.milestone.id === milestone.id
-    const index = state.milestones.indexOf(milestone)
-    const Icon = stationIcons[milestone.id]
+  const stateOf = (owners: OverviewMilestoneId[] | undefined): ElementState => {
+    const present = (owners ?? []).filter(has)
+    if (present.length === 0) return deploy ? 'skipped' : 'idle'
+    if (current !== null && present.includes(current)) return 'current'
+    return state.reached(present[0]) ? 'done' : 'upcoming'
+  }
+
+  const versionChipState: ElementState = settings.desiredUse === 'unused'
+    ? 'unused'
+    : settings.desiredUse === 'idle' ? 'idle' : stateOf(deploy ? ['select'] : ['save'])
+  const scalingChipState = scenario.kind === 'config' ? 'idle' : stateOf(deploy ? ['candidate'] : ['save', 'apply'])
+  const nodeState: Record<NodeKey, ElementState> = {
+    source: sourceUsed ? stateOf(['select']) : deploy ? 'skipped' : 'idle',
+    version: stateOf(deploy ? ['select', 'build'] : scenario.kind === 'config' ? ['save'] : undefined),
+    build: stateOf(['build']),
+    acr: stateOf(['publish', 'artifact']),
+    blob: stateOf(['publish']),
+    artifact: stateOf(['artifact', 'candidate']),
+    yarp: deploy ? stateOf(['release', 'verify']) : 'done',
+    customers: deploy ? stateOf(['verify']) : 'done',
+  }
+
+  const newSlot: SlotState = !deploy
+    ? 'none'
+    : state.reached('release') ? 'live'
+      : state.reached('check') ? 'healthy'
+        : state.reached('candidate') ? 'running'
+          : current === 'candidate' ? 'starting' : 'absent'
+  const liveSlot: SlotState = !scenario.hasExistingRuntime
+    ? 'empty'
+    : !deploy || !state.reached('release') ? 'live'
+      : state.complete ? 'removed'
+        : current === 'cleanup' ? 'removing' : 'old'
+  const routeTarget = newSlot === 'live' ? 'new' : liveSlot === 'live' ? 'live' : 'none'
+  const health = state.reached('check') ? 'passed' : current === 'check' ? 'probing' : 'waiting'
+
+  const pathState: Record<PathKey, ElementState> = {
+    'source-version': sourceUsed ? stateOf(['select']) : deploy ? 'skipped' : 'idle',
+    'drop-version': versionChipState === 'unused' || versionChipState === 'idle' ? versionChipState : stateOf(deploy ? ['select'] : ['save']),
+    'version-build': stateOf(['build']),
+    'build-acr': builds ? stateOf(['publish']) : deploy ? 'skipped' : 'idle',
+    'build-blob': builds ? stateOf(['publish']) : deploy ? 'skipped' : 'idle',
+    'acr-artifact': stateOf(['artifact']),
+    'artifact-runtime': stateOf(['candidate']),
+    'drop-scaling-new': stateOf(['candidate']),
+    'drop-scaling-live': stateOf(['apply']),
+    'blob-yarp': routeTarget === 'none' ? 'idle' : current === 'release' ? 'current' : 'done',
+    'customers-yarp': routeTarget === 'none' ? 'idle' : current === 'verify' ? 'current' : 'done',
+    'yarp-new': routeTarget === 'new' || current === 'release' || current === 'verify' ? stateOf(['release', 'verify']) : 'idle',
+    'yarp-live': routeTarget === 'live' && current !== 'release' ? 'done' : 'idle',
+  }
+  const visiblePaths = (Object.keys(paths) as PathKey[]).filter((key) =>
+    key === 'drop-scaling-live' ? scenario.kind === 'scale'
+      : key === 'drop-scaling-new' ? deploy
+        : key === 'yarp-new' || key === 'yarp-live' ? pathState[key] !== 'idle'
+          : true)
+  const pathLabel: Partial<Record<PathKey, string>> = {
+    'source-version': sourceUsed ? scenario.id === 'commit' ? 'commit 71ab42d' : 'commit' : undefined,
+    'drop-version': settings.desiredUse === 'captured' ? `frozen into ${state.newVersion}` : settings.desiredUse === 'matched' ? 'must match' : settings.desiredUse === 'unused' ? 'not used' : settings.desiredUse === 'saved' ? 'waits for next version' : undefined,
+    'version-build': builds ? 'code + vars' : undefined,
+    'build-acr': builds ? 'OCI image' : undefined,
+    'build-blob': builds ? 'static files' : undefined,
+    'acr-artifact': deploy ? 'pull · AcrPull' : undefined,
+    'artifact-runtime': deploy ? 'runs' : undefined,
+    'drop-scaling-new': `applied to ${state.newVersion}`,
+    'drop-scaling-live': `applied live to ${state.oldVersion}`,
+    'customers-yarp': 'requests',
+  }
+  const packets = isAnimating ? visiblePaths.filter((key) => pathState[key] === 'current') : []
+
+  const nodeCopy: Record<NodeKey, { name: string; context: string }> = {
+    source: { name: 'GitHub', context: !sourceUsed ? deploy ? 'not needed' : 'your repo' : scenario.id === 'commit' ? 'exact commit' : 'your repo · commit' },
+    version: {
+      name: 'AppVersion',
+      context: scenario.kind === 'config' ? 'next deploy captures it'
+        : scenario.kind === 'scale' ? 'unchanged'
+          : scenario.id === 'commit' ? 'commit + config matched'
+            : scenario.id === 'redeploy' ? 'active version, as is'
+              : scenario.id === 'activate' ? 'retained · own config' : 'commit + yaml + config',
+    },
+    build: { name: 'ADC build sandbox', context: builds ? 'temporary · Embr-run' : deploy ? 'skipped' : 'not used' },
+    acr: { name: 'Embr ACR', context: builds ? 'OCI image registry' : 'retained image' },
+    blob: { name: 'Embr Blob', context: builds ? 'static files' : 'retained files' },
+    artifact: { name: 'ADC Artifact', context: 'imported image' },
+    yarp: { name: 'Embr YARP', context: 'app URL · routing' },
+    customers: {
+      name: 'Customers',
+      context: routeTarget === 'none' ? 'no app yet' : state.released ? `${state.newVersion} verified` : `reach ${routeTarget === 'new' ? state.newVersion : state.oldVersion}`,
+    },
+  }
+
+  const versionCard = scenario.kind === 'config'
+    ? { label: 'next', frozen: false }
+    : scenario.kind === 'scale' ? { label: state.oldVersion ?? '', frozen: true }
+      : { label: state.newVersion, frozen: !builds || state.reached('select') }
+
+  const node = (key: NodeKey, group: 'build' | 'traffic', extra?: ReactNode) => {
+    const Icon = nodeIcon[key]
+    const point = nodePoint[key]
     return (
-      <button type="button" className="flow-station" aria-label={`Go to stage ${index + 1}: ${milestone.label}`} aria-describedby={`flow-context-${milestone.id}`} aria-current={active ? 'step' : undefined} onClick={() => onMilestoneSelect(milestone.start)} title={milestone.description}>
-        <span className="flow-symbol"><Icon size={26} strokeWidth={1.7} aria-hidden="true" /><span className="flow-number" aria-hidden="true">{done ? <Check size={11} /> : index + 1}</span></span>
-        <strong>{milestone.station}</strong>
-        <span className="flow-action" id={`flow-context-${milestone.id}`}>{milestone.context}</span>
-        <span className="flow-state">{done ? <><Check size={11} aria-hidden="true" />{milestone.id === 'check' ? 'Endpoint healthy' : 'Done'}</> : active ? isAnimating ? 'In progress' : 'You are here' : 'Up next'}</span>
-      </button>
+      <div
+        key={key}
+        className={`ov-node node-${key} group-${group} state-${nodeState[key]}`}
+        data-node={key}
+        role="group"
+        aria-label={`${nodeCopy[key].name}: ${nodeCopy[key].context}`}
+        style={{ '--x': point.x, '--y': point.y } as CSSProperties}
+      >
+        {key === 'version' ? (
+          <span className={`ov-version-card${versionCard.frozen ? ' is-frozen' : ''}`} data-frozen={versionCard.frozen}>
+            {versionCard.frozen && <LockKeyhole size={14} aria-hidden="true" />}
+            <b>{versionCard.label}</b>
+          </span>
+        ) : (
+          <span className="ov-icon"><Icon size={22} strokeWidth={1.8} aria-hidden="true" /></span>
+        )}
+        <strong>{nodeCopy[key].name}</strong>
+        <span className="ov-context">{nodeCopy[key].context}</span>
+        {extra}
+      </div>
     )
   }
 
+  const slot = (role: 'new' | 'live', slotState: SlotState, version: string | null, host: string | null, scaling: ScalingPolicy | null) => {
+    const tag: Record<SlotState, string> = {
+      absent: 'next', starting: 'starting', running: 'no traffic', healthy: 'healthy · no traffic', live: 'live', old: 'old · no traffic',
+      removing: 'removing', removed: 'removed', empty: 'nothing live', none: 'not needed',
+    }
+    const filled = !['absent', 'empty', 'none', 'removed'].includes(slotState)
+    const name = slotState === 'none' ? 'No new Artifact App' : slotState === 'empty' ? 'No live Artifact App yet' : `${version} Artifact App: ${tag[slotState]}`
+    return (
+      <div className={`ov-slot slot-${role} slot-state-${slotState}${role === 'live' && current === 'apply' ? ' state-current' : ''}${role === 'new' && ['candidate', 'check'].includes(current ?? '') ? ' state-current' : ''}`} role="group" aria-label={name} data-slot={role} data-slot-state={slotState} data-version={version ?? 'none'}>
+        <span className="ov-slot-tag">{tag[slotState]}</span>
+        <strong>{slotState === 'empty' || slotState === 'none' ? '—' : version}</strong>
+        {filled && host && <span className="ov-slot-config" title={`API_URL=https://${host}`}><LockKeyhole size={12} aria-hidden="true" />{host}</span>}
+        {filled && scaling && (
+          <span className="ov-slot-scale" title={formatScaling(scaling)}>
+            <SlidersHorizontal size={12} aria-hidden="true" />{scaling.minReplicas}–{scaling.maxReplicas}
+            <i aria-hidden="true">{Array.from({ length: scaling.maxReplicas }, (_, index) => <b key={index} className={index < scaling.minReplicas ? 'is-on' : undefined} />)}</i>
+          </span>
+        )}
+        {role === 'new' && deploy && filled && (
+          <span className={`ov-health health-${health}`} role="img" aria-label={`Health check ${health}`}><HeartPulse size={13} aria-hidden="true" /></span>
+        )}
+      </div>
+    )
+  }
+
+  const stageCount = state.milestones.length
+  const caption = state.complete ? state.completion : state.milestone
+
   return (
-    <div ref={root} id="overview-panel" className="overview" role="tabpanel" aria-labelledby="overview-tab">
-      <div className="flow-caption" role="status" aria-label="Current stage">
-        <span className="flow-counter">{String(state.milestoneIndex + 1).padStart(2, '0')}<small>/ {String(state.milestones.length).padStart(2, '0')}</small></span>
-        <div><h2>{state.complete ? `${state.newVersion} is live.` : state.milestone.title}</h2><p>{state.complete ? state.milestone.result : state.milestone.description}</p></div>
+    <div id="overview-panel" className="overview" role="tabpanel" aria-labelledby="overview-tab" data-kind={scenario.kind}>
+      <div className="flow-caption">
+        <div className="flow-caption-status" role="status" aria-label="Current stage">
+          <span className="flow-counter">{String(state.milestoneIndex + 1).padStart(2, '0')}<small>/ {String(stageCount).padStart(2, '0')}</small></span>
+          <div><h2>{caption.title}</h2><p>{caption.description}</p></div>
+        </div>
         <button type="button" className="overview-detail-link" onClick={onTechnicalView}>Technical detail <ArrowRight size={16} aria-hidden="true" /></button>
       </div>
 
-      <div className={`flow-map overview-canvas${isAnimating ? ' is-running' : ''}`} data-current-stage={state.complete ? 'complete' : state.milestone.id} style={{ '--flow-duration': `${motionDurationMs}ms` } as CSSProperties}>
-        <section className="release-inputs" aria-labelledby="release-inputs-title">
-          <h3 id="release-inputs-title" className="canvas-zone-title">Release inputs</h3>
-          <div className={`flow-stop ${stationClass(source)}`} data-station="select">{stationButton(source)}</div>
-          <div className="release-version-config" role="group" aria-label="Desired version configuration">
-            <span>Version configuration</span><code>CURRENCY={configuration.desired.variables[0].value}</code><small>{configuration.retained ? 'Desired edits are not used' : 'Captured with source + manifest'}</small>
-          </div>
-          <div className={`release-snapshot${configuration.captured ? ' is-frozen' : ''}`} role="group" aria-label="Release version snapshot" data-captured={configuration.captured}>
-            <LockKeyhole size={20} aria-hidden="true" />
-            <div><strong>{state.newVersion} {configuration.captured ? 'snapshot' : 'next snapshot'}</strong><code>CURRENCY={releaseCurrency}</code></div>
-            <span>{configuration.captured ? 'Frozen' : 'On creation'}</span>
-          </div>
-          <p className="version-ownership"><LockKeyhole size={13} aria-hidden="true" />Travels with this version</p>
-        </section>
+      <ol className="stage-stepper" aria-label="Stages">
+        {state.milestones.map((milestone, index) => {
+          const done = completedCount >= milestone.end
+          const active = milestone.id === current
+          return (
+            <li key={milestone.id} className={done ? 'is-done' : active ? 'is-current' : undefined}>
+              <button type="button" aria-label={`Go to stage ${index + 1}: ${milestone.label}`} aria-current={active ? 'step' : undefined} onClick={() => onMilestoneSelect(milestone.start)}>
+                <span className="stage-dot" aria-hidden="true">{done ? <Check size={11} strokeWidth={3} /> : index + 1}</span>
+                <span>{milestone.label}</span>
+              </button>
+            </li>
+          )
+        })}
+      </ol>
 
-        <section className="release-delivery" aria-labelledby="release-delivery-title">
-          <div className="canvas-zone-heading"><h3 id="release-delivery-title" className="canvas-zone-title">Build and delivery</h3>{!builds && <span className="flow-reuse-note"><RefreshCw size={13} aria-hidden="true" />{scenario.id === 'commit' ? 'Exact match reused' : 'Build skipped'}</span>}</div>
-          <ol className="flow-track" aria-label="Deployment flow">
-            {stations.map((milestone, index) => {
-              const active = !state.complete && milestone.id === state.milestone.id
-              const direction = index === 0 ? 'inlet' : index === 3 ? 'turn' : index > 3 ? 'reverse' : 'forward'
+      <div ref={frame} className="ov-frame" data-layout={layout.mode} style={layout.mode === 'canvas' ? { height: canvasHeight * layout.scale } : undefined}>
+        <div
+          className={`ov-canvas kind-${scenario.kind}${isAnimating ? ' is-running' : ''}`}
+          data-current-stage={current ?? 'complete'}
+          data-route-target={routeTarget}
+          role="group"
+          aria-label="Deployment map"
+          style={{ '--flow-duration': `${motionDurationMs}ms`, ...(layout.mode === 'canvas' ? { width: canvasWidth, height: canvasHeight, left: `calc(50% - ${(canvasWidth * layout.scale) / 2}px)`, transform: `scale(${layout.scale})` } : {}) } as CSSProperties}
+        >
+          <svg className="ov-lines" viewBox={`0 0 ${canvasWidth} ${canvasHeight}`} aria-hidden="true">
+            <defs>
+              {(['version', 'scaling', 'traffic', 'idle'] as const).map((tone) => (
+                <marker key={tone} id={`ov-arrow-${tone}`} className={`ov-arrow tone-${tone}`} markerUnits="userSpaceOnUse" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10 Z" /></marker>
+              ))}
+            </defs>
+            {visiblePaths.map((key) => {
+              const path = paths[key]
+              const lineState = pathState[key]
+              const tone = ['skipped', 'unused', 'idle', 'upcoming'].includes(lineState) ? 'idle' : path.tone
               return (
-                <li key={milestone.id} data-station={milestone.id} className={`flow-stop ${stationClass(milestone)}`} style={{ '--column': index < 3 ? index + 1 : 6 - index, '--row': index < 3 ? 1 : 2 } as CSSProperties}>
-                  <span className={`flow-connector direction-${direction}`}>
-                    <span className="flow-handoff">{milestone.handoff}</span>
-                    {active && isAnimating && <span key={`${milestone.id}-${motionDurationMs}`} className="flow-packet" data-payload={milestone.payload} aria-hidden="true"><Container size={14} /></span>}
-                  </span>
-                  {stationButton(milestone)}
-                </li>
+                <g key={key} className={`ov-line tone-${path.tone} state-${lineState}`} data-path={key}>
+                  <path d={path.d} markerEnd={key === 'blob-yarp' ? undefined : `url(#ov-arrow-${tone})`} />
+                  {path.label && pathLabel[key] && <text x={path.label.x} y={path.label.y} textAnchor={path.label.anchor ?? 'middle'}>{pathLabel[key]}</text>}
+                </g>
               )
             })}
-          </ol>
-          <div className={`flow-static-path${assetsStored ? ' outputs-ready' : ''}`} role="group" aria-label="Static asset path" data-assets-stored={assetsStored}>
-            <span><Files size={16} aria-hidden="true" />Static files</span><ArrowRight size={15} aria-hidden="true" /><span><Database size={16} aria-hidden="true" />Embr Blob Storage</span><ArrowRight size={15} aria-hidden="true" /><span><Route size={16} aria-hidden="true" />YARP</span>
+          </svg>
+
+          <section className="ov-settings" aria-label="Builder App settings">
+            <span className="ov-settings-title">Builder App settings</span>
+            <div className={`ov-chip chip-version state-${versionChipState}`} role="group" aria-label="Version configuration" data-use={settings.desiredUse}>
+              <span className="ov-chip-eyebrow"><LockKeyhole size={13} aria-hidden="true" />Version config</span>
+              <code>API_URL = {settings.desiredHost}</code>
+              <span className="ov-chip-rule">{settings.previousDesiredHost ? `Saved · was ${settings.previousDesiredHost}` : settings.desiredUse === 'unused' ? `Not used · ${state.newVersion} keeps its own` : 'Frozen into each new AppVersion'}</span>
+            </div>
+            <div className={`ov-chip chip-scaling state-${scalingChipState}`} role="group" aria-label="Scaling policy">
+              <span className="ov-chip-eyebrow"><SlidersHorizontal size={13} aria-hidden="true" />Scaling</span>
+              <code>{formatScaling(settings.scaling)}</code>
+              <span className="ov-chip-rule">{settings.previousScaling ? `Saved · was ${formatScaling(settings.previousScaling)}` : 'Always current · applied live'}</span>
+            </div>
+          </section>
+
+          <span className="ov-lane-title lane-release" aria-hidden="true">Release</span>
+          <span className="ov-lane-title lane-traffic" aria-hidden="true">Live traffic</span>
+
+          {node('source', 'build')}
+          {node('version', 'build')}
+          {node('build', 'build')}
+          {node('acr', 'build')}
+          {node('blob', 'build')}
+          {node('artifact', 'build')}
+
+          <div className={`ov-runtime state-${deploy ? stateOf(['candidate', 'check', 'release', 'verify', 'cleanup']) : stateOf(['apply'])}`} role="group" aria-label="ADC Artifact Apps">
+            <span className="ov-runtime-title">ADC Artifact Apps</span>
+            {slot('new', newSlot, deploy ? state.newVersion : null, settings.nextHost, deploy ? settings.scaling : null)}
+            {slot('live', liveSlot, state.oldVersion, settings.liveHost, settings.liveScaling)}
           </div>
-        </section>
 
-        <section className="release-visual" data-route-target={trafficTarget} aria-labelledby="running-app-title">
-          <h3 id="running-app-title" className="canvas-zone-title">Running app</h3>
-          <div className={`flow-stop ${stationClass(verification)}`} data-station="verify">{stationButton(verification)}</div>
-          <div className="active-release" role="group" aria-label="Active version configuration" data-active-version={state.servingVersion ?? 'none'}>
-            <div className="customer-traffic" role="group" aria-label="Customer traffic"><Users size={16} aria-hidden="true" /><span>Customers</span><ArrowRight size={14} aria-hidden="true" /><span>Embr YARP</span></div>
-            <div className="active-release-version"><Server size={28} aria-hidden="true" /><strong>{state.servingVersion ?? 'Not live yet'}</strong></div>
-            <code>{activeCurrency ? `CURRENCY=${activeCurrency}` : 'No active configuration'}</code>
-            <span className="active-config-source"><LockKeyhole size={12} aria-hidden="true" />{state.servingVersion ? `From the ${state.servingVersion} snapshot` : 'Waiting for the first release'}</span>
-          </div>
-          {!state.candidateServing && <p className="incoming-release">Incoming <strong>{state.newVersion}</strong><span>{releaseCurrency}</span></p>}
-          <div className="runtime-policy" role="group" aria-label="Effective runtime scaling policy"><Gauge size={16} aria-hidden="true" /><span>{effectiveScale.minReplicas}-{effectiveScale.maxReplicas} replicas <small>CPU target {effectiveScale.cpuUtilizationPercent}%</small></span></div>
-        </section>
+          {node('yarp', 'traffic')}
+          {node('customers', 'traffic')}
 
-        <section className={`overview-app-policy${policy.pending ? ' is-applying' : ''}`} aria-labelledby="overview-policy-title">
-          <div className="app-policy-heading"><Settings2 size={23} aria-hidden="true" /><div><h3 id="overview-policy-title">App-wide settings</h3><span>Stay current across version changes</span></div></div>
-          <div className="app-policy-current" role="group" aria-label="Desired app scaling policy"><strong>{policy.desired.components[0].minReplicas}-{policy.desired.components[0].maxReplicas} replicas</strong><span>CPU target {policy.desired.components[0].cpuUtilizationPercent}%</span></div>
-          <div className="app-policy-path"><span>No build. No new version.</span><i aria-hidden="true"><ArrowRight size={17} />{policy.pending && <b><Settings2 size={12} /></b>}</i></div>
-          <div className="app-policy-command"><button type="button" onClick={onApplyPolicy} disabled={!state.servingVersion || isAnimating || appPolicyPhase !== 'baseline'}><Gauge size={16} aria-hidden="true" />{appPolicyPhase === 'updated' ? 'Policy applied' : policy.pending ? 'Applying policy' : 'Apply 2-5 replicas'}</button><span role="status" aria-label="Policy application">{policy.pending ? 'Pending application' : appPolicyPhase === 'updated' ? 'Applied without redeploying' : 'Scaling preview'}</span></div>
-          {appPolicyPhase === 'updated' && <button type="button" className="policy-reset" aria-label="Reset app policy" title="Reset app policy" onClick={onResetPolicy}><RotateCcw size={15} aria-hidden="true" /></button>}
-        </section>
-      </div>
-
-      <div className="overview-footer">
-        <div className="release-outcome" role="status" aria-label="Release status">{state.released ? <CircleCheck size={18} aria-hidden="true" /> : <ShieldCheck size={18} aria-hidden="true" />}<strong>{state.released ? 'Deployment succeeded' : state.candidateServing ? 'Verifying release' : scenario.hasExistingRuntime ? 'Current version stays live' : 'Waiting for first release'}</strong><span>{state.servingVersion ? `${state.servingVersion} is serving customers` : 'No live version yet'}</span></div>
-        <button type="button" className={`flow-cleanup${state.milestone.id === 'cleanup' ? ' is-current' : ''}`} onClick={() => onMilestoneSelect(cleanup.start)} aria-label={`Go to stage ${state.milestones.length}: After release`} aria-current={!state.complete && state.milestone.id === 'cleanup' ? 'step' : undefined}><Trash2 size={15} aria-hidden="true" />{state.complete ? 'Cleanup complete' : state.released ? 'Background cleanup' : 'After release'}</button>
+          {packets.map((key) => {
+            const Icon = paths[key].icon
+            return (
+              <span key={`${key}-${current}`} className={`ov-packet tone-${paths[key].tone}`} data-packet={key} style={{ offsetPath: `path('${paths[key].d}')` }} aria-hidden="true">
+                <Icon size={13} strokeWidth={2.2} />
+              </span>
+            )
+          })}
+        </div>
       </div>
     </div>
   )

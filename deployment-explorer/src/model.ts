@@ -1,3 +1,13 @@
+import {
+  artifactAppScale,
+  baseScaling,
+  getConfigurationState,
+  scalingDocument,
+  updatedScaling,
+  versionConfiguration as configurationDocument,
+  versionHost,
+} from './configuration'
+
 export type NodeId =
   | 'client'
   | 'arm'
@@ -17,6 +27,7 @@ export type NodeId =
   | 'customer'
 
 export type Phase =
+  | 'updating'
   | 'pending'
   | 'preparing'
   | 'building'
@@ -84,7 +95,8 @@ export interface FlowStep {
 }
 
 export interface Scenario {
-  id: 'manual' | 'latest' | 'commit' | 'redeploy' | 'activate'
+  id: 'manual' | 'latest' | 'commit' | 'redeploy' | 'activate' | 'config' | 'scale'
+  kind: 'deploy' | 'config' | 'scale'
   label: string
   title: string
   summary: string
@@ -103,6 +115,7 @@ export interface ExampleDocument {
 }
 
 export const phaseLabels: Record<Phase, string> = {
+  updating: 'App settings',
   pending: 'Pending',
   preparing: 'Preparing source',
   building: 'Building',
@@ -308,11 +321,11 @@ const sourceBuildSteps = (
     title: 'Create the candidate and wait for ADC native readiness',
     source: 'artifact',
     target: 'candidate',
-    payload: 'Artifact Version + frozen AppVersion variables + HTTP Readiness probe',
+    payload: 'Artifact Version + frozen AppVersion variables + current app scaling + HTTP Readiness probe',
     payloadKind: 'resource',
     reason: hasExistingRuntime
-      ? 'The active provider is never modified in place. Embr creates an isolated candidate with an ADC HTTP Readiness probe, confirms ADC retained that probe, then waits for every configured replica and app container to report Running, Started, and Ready.'
-      : 'Embr creates the first provider with an ADC HTTP Readiness probe, confirms ADC retained that probe, then waits for every configured replica and app container to report Running, Started, and Ready.',
+      ? 'The active provider is never replaced in place. Embr creates an isolated candidate from the AppVersion image and frozen variables, applies the app current scaling policy, adds an ADC HTTP Readiness probe, then waits for every configured replica and app container to report Running, Started, and Ready.'
+      : 'Embr creates the first provider from the AppVersion image and frozen variables, applies the app current scaling policy, adds an ADC HTTP Readiness probe, then waits for every configured replica and app container to report Running, Started, and Ready.',
     result: 'ADC native readiness passed; candidate remains outside YARP traffic',
     api: 'ArtifactAppRuntimeProvider.CreateCandidateAsync -> WaitForReplicaReadinessAsync',
     executionSurface: 'armApi',
@@ -568,9 +581,9 @@ const retainedRuntimeSteps = (
     title: 'Create the candidate and wait for ADC native readiness',
     source: 'artifact',
     target: 'candidate',
-    payload: `${appVersionId} outputs + frozen version variables + HTTP Readiness probe`,
+    payload: `${appVersionId} outputs + frozen version variables + current app scaling + HTTP Readiness probe`,
     payloadKind: 'resource',
-    reason: 'Activation is still blue-green: Embr creates a fresh provider from retained outputs and waits for every configured replica and app container to report Running, Started, and Ready.',
+    reason: 'Activation is still blue-green: Embr creates a fresh provider from retained outputs and the selected version frozen variables, applies the app current scaling policy, and waits for every configured replica and app container to report Running, Started, and Ready.',
     result: 'ADC native readiness passed; candidate remains outside YARP traffic',
     api: 'ArtifactAppRuntimeProvider.CreateCandidateAsync -> WaitForReplicaReadinessAsync',
     executionSurface: 'armApi',
@@ -808,9 +821,9 @@ const redeploySteps: FlowStep[] = [
       title: 'Create the candidate and wait for ADC native readiness',
       source: 'artifact',
       target: 'candidate',
-      payload: 'ver_17 outputs + frozen version variables + HTTP Readiness probe',
+      payload: 'ver_17 outputs + frozen version variables + current app scaling + HTTP Readiness probe',
       payloadKind: 'resource',
-      reason: 'Redeploy is still blue-green: Embr creates a fresh provider, confirms ADC retained the configured Readiness probe, and waits for every configured replica and app container to report Running, Started, and Ready.',
+      reason: 'Redeploy is still blue-green: Embr creates a fresh provider with the same frozen variables and the app current scaling policy, confirms ADC retained the configured Readiness probe, and waits for every configured replica and app container to report Running, Started, and Ready.',
       result: 'ADC native readiness passed; new candidate remains outside YARP traffic',
       api: 'ArtifactAppRuntimeProvider.CreateCandidateAsync -> WaitForReplicaReadinessAsync',
       executionSurface: 'armApi',
@@ -966,9 +979,117 @@ const activateSteps: FlowStep[] = [
   ...retainedRuntimeSteps('activate', 'adp_activate', 'ver_16', 'v16'),
 ]
 
+const configSteps: FlowStep[] = [
+  step({
+    id: 'config-request',
+    phase: 'updating',
+    title: 'Save a new desired API_URL through ARM',
+    source: 'client',
+    target: 'arm',
+    payload: 'PUT properties.versionConfiguration.variables',
+    payloadKind: 'request',
+    reason: 'Variables are Builder App settings, written with a normal resource update. This is not a deploy action; omitted properties such as source and scaling stay unchanged.',
+    result: '200 OK after Regional saves the desired value; the response lists variable names only',
+    api: 'PUT .../Microsoft.Web/builderApps/deployment-explorer-demo?api-version=2026-08-01-preview',
+    executionSurface: 'armApi',
+  }),
+  step({
+    id: 'config-regional',
+    phase: 'updating',
+    title: 'Merge and validate the variable list',
+    source: 'arm',
+    target: 'regional',
+    payload: 'UpdateBuilderAppRequest { versionConfiguration }',
+    payloadKind: 'request',
+    reason: 'The listed names replace the desired set: a listed name may omit its value to keep it, and omitted names are removed. PORT and EMBR_* stay platform-owned.',
+    result: 'Names unique; at most 100 entries, 32 KiB per value, and 64 KiB total',
+    api: 'BuilderAppService.UpdateAppAsync -> MergeVersionConfiguration',
+    executionSurface: 'nonArmApi',
+  }),
+  step({
+    id: 'config-persist',
+    phase: 'updating',
+    title: 'Store it for the next AppVersion',
+    source: 'regional',
+    target: 'app',
+    payload: 'versionConfiguration: API_URL=https://api.contoso.com',
+    payloadKind: 'resource',
+    reason: 'Desired version configuration takes effect only when a deploy creates the next AppVersion and snapshots it with the commit and builder.yaml. Saving it makes no provider call and creates no AppVersion or Deployment.',
+    result: 'Desired API_URL saved; v16 keeps serving its frozen legacy.contoso.com',
+    api: 'IBuilderAppRepository.UpdateWithRetryAsync(app with { VersionConfiguration })',
+  }),
+]
+
+const scaleSteps: FlowStep[] = [
+  step({
+    id: 'scale-request',
+    phase: 'updating',
+    title: 'Send the new scaling policy through ARM',
+    source: 'client',
+    target: 'arm',
+    payload: 'PUT properties.scaling.components[api]',
+    payloadKind: 'request',
+    reason: 'builder app scale writes the Builder App resource. It never invokes deploy, and it returns after the resource update and any live runtime update finish.',
+    result: '200 OK after the policy is saved and ADC accepts the runtime update',
+    api: 'builder app scale deployment-explorer-demo --component api --min 2 --max 6 --cpu-percent 60',
+    executionSurface: 'armApi',
+  }),
+  step({
+    id: 'scale-regional',
+    phase: 'updating',
+    title: 'Validate the policy for the active component',
+    source: 'arm',
+    target: 'regional',
+    payload: 'UpdateBuilderAppRequest { scaling }',
+    payloadKind: 'request',
+    reason: 'Regional requires 1 <= minReplicas < maxReplicas <= 20, at least one CPU or memory target, and a compute component that exists in the active AppVersion.',
+    result: 'Policy valid for active component api',
+    api: 'ValidateAutoscalingAdmission -> ValidateAutoscalingTargets',
+    executionSurface: 'nonArmApi',
+  }),
+  step({
+    id: 'scale-persist',
+    phase: 'updating',
+    title: 'Save scaling as current app policy',
+    source: 'regional',
+    target: 'app',
+    payload: 'scaling: api 2-6 replicas, CPU 60%',
+    payloadKind: 'resource',
+    reason: 'Scaling belongs to the Builder App, not to any AppVersion. Every later deploy, redeploy, or activation uses whatever policy is current.',
+    result: 'BuilderApp.scaling saved; versionConfiguration and every AppVersion unchanged',
+    api: 'IBuilderAppRepository.UpdateWithRetryAsync(app with { Scaling })',
+  }),
+  step({
+    id: 'scale-load-active',
+    phase: 'updating',
+    title: 'Rebuild the active Artifact App request',
+    source: 'app',
+    target: 'version',
+    payload: 'runtime.activeDeploymentId -> ver_17',
+    payloadKind: 'resource',
+    reason: 'Embr loads the active Deployment and AppVersion, then builds the same request it uses for deploys: the v17 image, run settings, and frozen variables, plus the new scale block.',
+    result: 'Request = ver_17 outputs + frozen API_URL + scaling 2-6',
+    api: 'AppScalingService.ApplyAsync -> ArtifactAppCandidateRequestFactory.Create(version, scaling)',
+  }),
+  step({
+    id: 'scale-apply',
+    phase: 'updating',
+    title: 'Update the running Artifact App in place',
+    source: 'regional',
+    target: 'existing',
+    payload: 'scale { minReplicas: 2, maxReplicas: 6, cpu: 60 }',
+    payloadKind: 'resource',
+    reason: 'Unlike a deploy, this changes the live provider in place. One complete PUT keeps its image, CPU, memory, readiness probe, environment, and identity, and replaces only the scale block. ADC then converges replicas.',
+    result: 'ADC accepted the PUT; v17 scales within 2-6 replicas; the route never moved',
+    api: 'ArtifactAppRuntimeProvider.ApplyScalingAsync -> PUT .../providers/Microsoft.App/artifactApps/{name}',
+    executionSurface: 'armApi',
+  }),
+]
+
 export const scenarios: Scenario[] = [
   {
     id: 'manual',
+    kind: 'deploy',
     label: 'First deploy',
     title: 'Build and activate version 1',
     summary: 'Regional reserves the app, resolves source, creates AppVersion v1, then persists a Building operation. Runtime provisioning begins only after the AppVersion is ready.',
@@ -981,6 +1102,7 @@ export const scenarios: Scenario[] = [
   },
   {
     id: 'latest',
+    kind: 'deploy',
     label: 'Deploy latest',
     title: 'Build the latest source revision and replace v16',
     summary: 'This is not a configuration update. The ARM deploy action resolves the current configured branch head, builds a new AppVersion, and keeps v16 live until v17 passes health and YARP switches.',
@@ -992,6 +1114,7 @@ export const scenarios: Scenario[] = [
   },
   {
     id: 'commit',
+    kind: 'deploy',
     label: 'Deploy commit',
     title: 'Deploy exact commit 71ab42d with current desired configuration',
     summary: 'Regional revalidates source access, then reuses an exact retained AppVersion only when lifecycle, source, root, commit, complete desired configuration, and output availability all match. Otherwise it builds a new version from that SHA.',
@@ -1003,6 +1126,7 @@ export const scenarios: Scenario[] = [
   },
   {
     id: 'redeploy',
+    kind: 'deploy',
     label: 'Redeploy',
     title: 'Re-provision retained version v17',
     summary: 'No GitHub call and no build. A ready AppVersion creates a fresh provider and moves traffic with the same health gates.',
@@ -1014,6 +1138,7 @@ export const scenarios: Scenario[] = [
   },
   {
     id: 'activate',
+    kind: 'deploy',
     label: 'Activate version',
     title: 'Activate retained AppVersion v16 explicitly',
     summary: 'The selected immutable AppVersion keeps its original source, manifest, outputs, and configuration. A new Deployment provisions fresh runtime resources without GitHub authorization or a build.',
@@ -1022,6 +1147,32 @@ export const scenarios: Scenario[] = [
     newVersion: 'v16',
     appVersionId: 'ver_16',
     steps: activateSteps,
+  },
+  {
+    id: 'config',
+    kind: 'config',
+    label: 'Change version config',
+    title: 'Save API_URL for the next AppVersion',
+    summary: 'Desired version configuration is saved on the Builder App. The running v16 keeps its frozen value; no AppVersion, Deployment, build, or provider call is created.',
+    hasExistingRuntime: true,
+    oldVersion: 'v16',
+    newVersion: 'v16',
+    appVersionId: 'ver_16',
+    nodeLabels: { candidate: 'No candidate', existing: 'Running Artifact App' },
+    steps: configSteps,
+  },
+  {
+    id: 'scale',
+    kind: 'scale',
+    label: 'Change scaling',
+    title: 'Apply 2-6 replicas to the running app',
+    summary: 'Scaling is current Builder App policy. Embr saves it, then sends one complete PUT to the active Artifact App. No AppVersion, Deployment, build, or traffic switch.',
+    hasExistingRuntime: true,
+    oldVersion: 'v17',
+    newVersion: 'v17',
+    appVersionId: 'ver_17',
+    nodeLabels: { candidate: 'No candidate', existing: 'Running Artifact App' },
+    steps: scaleSteps,
   },
 ]
 
@@ -1047,11 +1198,11 @@ export function getNodeLabel(node: SystemNode, scenario: Scenario): string {
 }
 
 const apiByNode: Record<NodeId, string> = {
-  client: 'builder app deploy {name} [--commit <40-char SHA>]\nbuilder app version activate {name} <version-id|--previous>\nGET {Azure-AsyncOperation}',
-  arm: 'PUBLIC ARM API · Microsoft.Web protocol adapter\n\nPOST .../builderApps/{name}/deploy\nPOST .../builderApps/{name}/redeploy\nPOST .../builderApps/{name}/versions/{versionId}/activate\n\nValidates ARM caller + action payload + idempotency key\nReturns 202 + Azure-AsyncOperation + Retry-After\nCalls Regional through RegionalApiClient',
+  client: 'builder app deploy {name} [--commit <40-char SHA>]\nbuilder app version activate {name} <version-id|--previous>\nbuilder app scale {name} --component <name> --min <n> --max <n> --cpu-percent <n>\nGET {Azure-AsyncOperation}',
+  arm: 'PUBLIC ARM API · Microsoft.Web protocol adapter\n\nPOST .../builderApps/{name}/deploy\nPOST .../builderApps/{name}/redeploy\nPOST .../builderApps/{name}/versions/{versionId}/activate\n  -> 202 + Azure-AsyncOperation + Retry-After\nPUT .../builderApps/{name} (versionConfiguration | scaling)\n  -> 200 OK; omitted properties are preserved\n\nValidates ARM caller + action payload + idempotency key\nCalls Regional through RegionalApiClient',
   regional: 'PRIVATE NON-ARM SERVICE API · ClusterIP only\nCaller: Embr.Arm.Api through RegionalApiClient\nAuth: ARM workload identity token + mTLS + service object-ID pin\n\nPOST /internal/regional/v1/builder-apps/deploy | redeploy | versions/activate\n  -> TriggerAsync | TriggerRedeployAsync | ActivateVersionAsync\n  -> admit, resolve/select AppVersion, persist + signal\n\nBackground dispatcher/reconciler\n  -> AppDeploymentService.ResumeAsync (claim + execute)\n  -> AppPostDeploymentCleanupReconciler (claim app admission + retry cleanup)',
   deployment: 'IBuilderAppDeploymentRepository.CreateAsync\nTryClaimExecutionAsync\nTryClaimPostDeploymentCleanupAsync\nUpdateWithRetryAsync\nReleaseDeploymentAsync',
-  app: 'PUT | GET | PATCH | DELETE .../Microsoft.Web/builderApps/{name}\nVersionConfiguration is desired state captured by the next AppVersion\nSource attach: authorizationToken or transient repositoryToken; same-source updates may omit both\nDeploy always revalidates persisted source authorization\nTryAdmitDeploymentAsync | TryAdmitPostDeploymentCleanupAsync',
+  app: 'PUT | GET | PATCH | DELETE .../Microsoft.Web/builderApps/{name}\nversionConfiguration: desired; frozen into the next AppVersion; values are write-only\nscaling: current policy; saved and applied to the active Artifact App; never frozen\nSource attach: authorizationToken or transient repositoryToken; same-source updates may omit both\nDeploy always revalidates persisted source authorization\nTryAdmitDeploymentAsync | TryAdmitPostDeploymentCleanupAsync',
   github: 'CreateInstallationToken\nGetBranchShaAsync\nGetFileContentAsync\nGetCloneUrlAsync',
   manifest: 'GET /repos/{owner}/{repo}/contents/builder.yaml?ref={sha}\nAppManifestDeserializer.Parse + Validate',
   version: 'GET .../builderApps/{app}/versions/{versionId}\nPOST .../builderApps/{app}/versions/{versionId}/activate\nIAppVersionService.CreatePendingFromReferenceAsync | CreatePendingFromRevisionAsync',
@@ -1060,7 +1211,7 @@ const apiByNode: Record<NodeId, string> = {
   acr: 'POST {registry}/scheduleRun?api-version=2019-04-01\nGET {registry}/runs/{runId}',
   artifact: 'PUT | GET | DELETE .../providers/Microsoft.App/artifacts/{name}',
   candidate: 'PUT | GET | DELETE .../providers/Microsoft.App/artifactApps/{name}\nWaitForReplicaReadinessAsync (probe retained + replicas/containers Running, Started, Ready)\nGET https://{candidateFqdn}/{run.healthCheckPath}\nAppEndpointProbe.WaitForHealthyAsync (one exact HTTP 200)',
-  existing: 'Previous Artifact App becomes unrouted at activation\nAppPostDeploymentCleanupReconciler deletes it after deployment success',
+  existing: 'Previous Artifact App becomes unrouted at activation\nAppPostDeploymentCleanupReconciler deletes it after deployment success\nApplyScalingAsync: one complete PUT replaces only the scale block of the active app',
   route: 'IYarpClient.ActivateAppRouteAsync(ActivateAppRouteRequest)\nFields: ownerId, appLifecycleId, appVersionId, appDeploymentId, subdomain, vms, backendPrefixes, staticRouting, auth, authRevision\nCosmos ETag retries prevent lost updates. Owner/lifecycle retirement fences delete-recreate, while monotonic authRevision preserves newer auth. appDeploymentId identifies the publisher; it is not an epoch fence.',
   customer: 'SubdomainHelper.ComputeAppSubdomain(app.Name, app.Id, routingDomain)\n  -> {sanitized-name}-{last-8-of-app-id}.{routingDomain}\n\nAppRouteActivator.ActivateAsync\n  -> IYarpClient.ActivateAppRouteAsync(request)\n\nUnless auth mode is Required:\nGET https://{generated-hostname}/{healthCheckPath}\n  -> expect HTTP 200 + X-Embr-App-Version\n\nAfter verification: BuilderApp.runtime.url = https://{generated-hostname}',
 }
@@ -1086,7 +1237,8 @@ export function getNodeExample(
       ? 'adp_latest'
       : `adp_${scenario.id}`
   const versionId = scenario.appVersionId
-  const retainedVersion = scenario.id === 'commit' || scenario.id === 'redeploy' || scenario.id === 'activate'
+  const settingsUpdate = scenario.kind !== 'deploy'
+  const retainedVersion = settingsUpdate || scenario.id === 'commit' || scenario.id === 'redeploy' || scenario.id === 'activate'
   const versionCreated = retainedVersion || completedIds.has('create-version')
   const deploymentCreated = completedIds.has('create-deployment')
     || [...completedIds].some((item) => item.endsWith('-create-deployment'))
@@ -1132,15 +1284,17 @@ export function getNodeExample(
   const previousVersionId = scenario.oldVersion === null
     ? null
     : `ver_${scenario.oldVersion.replace(/^v/, '').replaceAll('-', '_')}`
-  const frozenReleaseChannel = scenario.id === 'activate'
-    ? 'stable-v16'
-    : scenario.id === 'redeploy'
-      ? 'stable-v17'
-      : 'current'
-  const versionConfiguration = {
-    variables: [{ name: 'RELEASE_CHANNEL', value: frozenReleaseChannel }],
-    components: [{ name: 'web' }, { name: 'api' }],
-  }
+  const settings = getConfigurationState(scenario, completedCount)
+  const frozenConfiguration = configurationDocument(versionHost(scenario.newVersion)!)
+  const previousConfiguration = scenario.oldVersion === null ? null : configurationDocument(versionHost(scenario.oldVersion)!)
+  const runtimeEnvironment = { secrets: [{ name: 'env-0' }], env: [{ name: 'API_URL', secretRef: 'env-0' }] }
+  const settingsSaved = settingsUpdate && completedIds.has(`${scenario.kind}-persist`)
+  const updateBody = scenario.kind === 'config'
+    ? { versionConfiguration: { variables: [{ name: 'API_URL', value: 'https://api.contoso.com' }] } }
+    : { scaling: scalingDocument(updatedScaling) }
+  const updateResponse = scenario.kind === 'config'
+    ? { versionConfiguration: { variables: [{ name: 'API_URL' }], components: [{ name: 'web' }, { name: 'api' }] }, runtime: { activeAppVersionId: versionId, versionConfiguration: { variables: [{ name: 'API_URL' }] } } }
+    : { scaling: scalingDocument(updatedScaling), runtime: { activeAppVersionId: versionId } }
   const image = `embr.azurecr.io/builder/app_shop/api@sha256:71ab42d9c508...`
   const candidateName = `embr-${deploymentId.replace('adp_', '')}-7c2f`
   const candidateFqdn = `${candidateName}.westus3.azurecontainerapps.io`
@@ -1148,6 +1302,15 @@ export function getNodeExample(
 
   switch (id) {
     case 'client':
+      if (settingsUpdate) {
+        return {
+          title: scenario.kind === 'config' ? 'ARM resource update' : 'Builder CLI command',
+          format: 'CLI',
+          body: scenario.kind === 'config'
+            ? `az rest --method put\n  --url "$APP_RESOURCE_ID?api-version=2026-08-01-preview"\n  --body '{"location":"westus2","properties":{"versionConfiguration":{"variables":[{"name":"API_URL","value":"https://api.contoso.com"}]}}}'`
+            : `builder app scale deployment-explorer-demo\n  --subscription 64fc8655-6859-4b06-96d2-df698d5808cc\n  --resource-group rg-builder-cli-demo-amahmoud11\n  --component api --min 2 --max 6 --cpu-percent 60`,
+        }
+      }
       return {
         title: 'Builder CLI command',
         format: 'CLI',
@@ -1158,12 +1321,33 @@ export function getNodeExample(
             : `builder app deploy deployment-explorer-demo\n  --subscription 64fc8655-6859-4b06-96d2-df698d5808cc\n  --resource-group rg-builder-cli-demo-amahmoud11${scenario.id === 'commit' ? `\n  --commit ${sourceRevision}` : ''}\n  --request-id ${scenario.id}-842`,
       }
     case 'arm':
+      if (settingsUpdate) {
+        return {
+          title: 'ARM resource update response',
+          format: 'HTTP',
+          body: `PUT .../Microsoft.Web/builderApps/deployment-explorer-demo\n\n${json({ properties: updateBody })}\n\n${settingsSaved ? `200 OK\n${json({ properties: updateResponse })}` : 'Waiting for Regional to save the update'}`,
+        }
+      }
       return {
         title: 'ARM action response',
         format: 'HTTP',
         body: `POST .../Microsoft.Web/builderApps/deployment-explorer-demo/${scenario.id === 'activate' ? `versions/${versionId}/activate` : scenario.id === 'redeploy' ? 'redeploy' : 'deploy'}\n${scenario.id === 'commit' ? `\n{ "commitSha": "${sourceRevision}", "idempotencyKey": "commit-842" }\n` : ''}\n202 Accepted\nAzure-AsyncOperation: .../operationStatuses/${deploymentId}\nRetry-After: 5`,
       }
     case 'regional':
+      if (settingsUpdate) {
+        return {
+          title: 'Internal UpdateBuilderAppRequest',
+          format: 'JSON',
+          body: json({
+            subscriptionId: '64fc8655-6859-4b06-96d2-df698d5808cc',
+            resourceGroup: 'rg-builder-cli-demo-amahmoud11',
+            name: 'deployment-explorer-demo',
+            properties: updateBody,
+            armTenantId: '72f988bf-86f1-41af-91ab-2d7cd011db47',
+            armObjectId: '093b6f15-6e26-4906-b372-10c4fe0c3eb0',
+          }),
+        }
+      }
       return {
         title: scenario.id === 'activate'
           ? 'Internal ActivateBuilderAppVersionRequest'
@@ -1183,10 +1367,11 @@ export function getNodeExample(
         }),
       }
     case 'deployment':
+      if (settingsUpdate) return { title: 'No Deployment for a settings update', format: 'JSON', body: json({ created: false, reason: scenario.kind === 'config' ? 'Desired versionConfiguration waits for the next deploy to snapshot it into a new AppVersion.' : 'Scaling is applied to the active Artifact App directly; the active Deployment stays the same.', activeDeploymentId: 'adp_previous' }) }
       if (!deploymentCreated) return { title: 'Deployment before creation', format: 'JSON', body: json({ id: deploymentId, state: 'not created yet', waitingFor: 'validated Builder App configuration and trigger metadata' }) }
-      return { title: 'BuilderAppDeployment operation document', format: 'JSON', body: json({ id: deploymentId, appId: 'app_shop', appVersionId: versionId, status: deploymentStatus, action: deploymentAction, sourceRevision, configuration: versionConfiguration, executionEpoch: deploymentCreated ? 4 : 0, candidateFqdn: candidateCreated ? candidateFqdn : undefined, publicUrl: switched ? demoCustomerUrl : undefined, previousDeploymentId: scenario.hasExistingRuntime ? 'adp_previous' : undefined, postDeploymentCleanupStatus: promoted ? cleanupCompleted ? 'completed' : 'pending' : undefined, completedAt: promoted ? '2026-09-22T18:42:31Z' : undefined }) }
+      return { title: 'BuilderAppDeployment operation document', format: 'JSON', body: json({ id: deploymentId, appId: 'app_shop', appVersionId: versionId, status: deploymentStatus, action: deploymentAction, sourceRevision, configuration: frozenConfiguration, executionEpoch: deploymentCreated ? 4 : 0, candidateFqdn: candidateCreated ? candidateFqdn : undefined, publicUrl: switched ? demoCustomerUrl : undefined, previousDeploymentId: scenario.hasExistingRuntime ? 'adp_previous' : undefined, postDeploymentCleanupStatus: promoted ? cleanupCompleted ? 'completed' : 'pending' : undefined, completedAt: promoted ? '2026-09-22T18:42:31Z' : undefined }) }
     case 'app':
-      return { title: 'Regional BuilderApp persistence document', format: 'JSON', body: json({ id: 'app_shop', name: 'deployment-explorer-demo', subscriptionId: '64fc8655-6859-4b06-96d2-df698d5808cc', resourceGroup: 'rg-builder-cli-demo-amahmoud11', location: 'westus2', provisioningState: 'Succeeded', lifecycleId: 'ali_31', source: { provider: 'github', id: '1211637325', displayName: 'amahmoud57/simple-python-notes-app', reference: 'demo/builder-deployment-explorer', authorization: { provider: 'github', providerSubjectId: 'github-user-842', armTenantId: '72f988bf-86f1-41af-91ab-2d7cd011db47', armObjectId: '093b6f15-6e26-4906-b372-10c4fe0c3eb0', authorizedAt: '2026-09-22T18:30:00Z' } }, versionConfiguration: { variables: [{ name: 'RELEASE_CHANNEL', value: 'current' }], components: [{ name: 'web' }, { name: 'api' }] }, automation: { autoDeploy: false }, routeAuthRevision: 12, routeAuthAppliedRevision: switched ? 12 : 11, pendingDeploymentId: cleanupInProgress || appReserved && !promoted ? deploymentId : null, pendingDeploymentCleanupEpoch: cleanupInProgress ? 4 : undefined, runtime: promoted ? { activeDeploymentId: deploymentId, activeAppVersionId: versionId, versionConfiguration, url: demoCustomerUrl } : scenario.hasExistingRuntime ? { activeDeploymentId: 'adp_previous', activeAppVersionId: previousVersionId, versionConfiguration: { variables: [{ name: 'RELEASE_CHANNEL', value: 'previous' }], components: [{ name: 'web' }, { name: 'api' }] }, url: demoCustomerUrl } : null }) }
+      return { title: 'Regional BuilderApp persistence document', format: 'JSON', body: json({ id: 'app_shop', name: 'deployment-explorer-demo', subscriptionId: '64fc8655-6859-4b06-96d2-df698d5808cc', resourceGroup: 'rg-builder-cli-demo-amahmoud11', location: 'westus2', provisioningState: 'Succeeded', lifecycleId: 'ali_31', source: { provider: 'github', id: '1211637325', displayName: 'amahmoud57/simple-python-notes-app', reference: 'demo/builder-deployment-explorer', authorization: { provider: 'github', providerSubjectId: 'github-user-842', armTenantId: '72f988bf-86f1-41af-91ab-2d7cd011db47', armObjectId: '093b6f15-6e26-4906-b372-10c4fe0c3eb0', authorizedAt: '2026-09-22T18:30:00Z' } }, versionConfiguration: configurationDocument(settings.desiredHost), scaling: scalingDocument(settings.scaling), automation: { autoDeploy: false }, routeAuthRevision: 12, routeAuthAppliedRevision: switched || settingsUpdate ? 12 : 11, pendingDeploymentId: cleanupInProgress || appReserved && !promoted ? deploymentId : null, pendingDeploymentCleanupEpoch: cleanupInProgress ? 4 : undefined, runtime: promoted ? { activeDeploymentId: deploymentId, activeAppVersionId: versionId, versionConfiguration: frozenConfiguration, url: demoCustomerUrl } : scenario.hasExistingRuntime ? { activeDeploymentId: 'adp_previous', activeAppVersionId: previousVersionId, versionConfiguration: previousConfiguration, url: demoCustomerUrl } : null }) }
     case 'github':
       return { title: 'GitHub source identity', format: 'JSON', body: json({ provider: 'github', id: '1211637325', displayName: 'amahmoud57/simple-python-notes-app', reference: 'demo/builder-deployment-explorer', revision: sourceRevision ?? '9f42c1e4a77b81f6d49d3c2a...' }) }
     case 'manifest':
@@ -1203,7 +1388,7 @@ export function getNodeExample(
           requestedSourceRevision: sourceRevision,
           source: { provider: 'github', id: '1211637325', reference: 'demo/builder-deployment-explorer', revision: sourceRevision ?? '9f42c1e4a77...' },
           manifest: { file: 'builder.yaml', components: [{ name: 'web', type: 'static', path: '/' }, { name: 'api', type: 'compute', path: '/api' }] },
-          configuration: versionConfiguration,
+          configuration: frozenConfiguration,
           build: {
             status: versionReady ? 'ready' : versionBuilding ? 'building' : 'pending',
             components: [
@@ -1233,10 +1418,11 @@ export function getNodeExample(
     case 'artifact':
       return { title: 'Microsoft.App/artifacts resource', format: 'JSON', body: json({ id: `/subscriptions/runtime-sub/resourceGroups/runtime-rg/providers/Microsoft.App/artifacts/${candidateName}`, type: 'Microsoft.App/artifacts', properties: { provisioningState: candidateCreated ? 'Succeeded' : 'NotCreated', source: { kind: 'registry', imageUrl: image }, latestVersionState: candidateCreated ? 'Ready' : null } }) }
     case 'candidate':
-      return { title: 'Microsoft.App/artifactApps candidate', format: 'JSON', body: json({ id: `/subscriptions/runtime-sub/resourceGroups/runtime-rg/providers/Microsoft.App/artifactApps/${candidateName}`, type: 'Microsoft.App/artifactApps', properties: { provisioningState: candidateCreated ? 'Succeeded' : 'NotCreated', ingress: { external: true, targetPort: 8000, fqdn: candidateCreated ? candidateFqdn : null }, scale: { minReplicas: 1, maxReplicas: 1 }, readinessProbe: candidateCreated ? { type: 'Http', path: '/api/health', port: 8000, retainedByAdc: candidateNativeReady, replicasReady: candidateNativeReady } : null, directHealthGate: candidateCreated ? { endpoint: `https://${candidateFqdn}/api/health`, expectedStatus: 200, state: candidateHealthy ? 'passed' : candidateNativeReady ? 'checking' : 'waitingForNativeReadiness' } : null } }) }
+      if (settingsUpdate) return { title: 'No candidate for a settings update', format: 'JSON', body: json({ created: false, reason: scenario.kind === 'scale' ? 'Scaling updates the running Artifact App in place.' : 'The running Artifact App is untouched until the next deploy.' }) }
+      return { title: 'Microsoft.App/artifactApps candidate', format: 'JSON', body: json({ id: `/subscriptions/runtime-sub/resourceGroups/runtime-rg/providers/Microsoft.App/artifactApps/${candidateName}`, type: 'Microsoft.App/artifactApps', properties: { provisioningState: candidateCreated ? 'Succeeded' : 'NotCreated', configurationSources: { environment: `AppVersion ${versionId} (frozen)`, scale: 'BuilderApp.scaling (current)' }, ingress: { external: true, targetPort: 8000, fqdn: candidateCreated ? candidateFqdn : null }, configuration: runtimeEnvironment, scale: artifactAppScale(baseScaling), readinessProbe: candidateCreated ? { type: 'Http', path: '/api/health', port: 8000, retainedByAdc: candidateNativeReady, replicasReady: candidateNativeReady } : null, directHealthGate: candidateCreated ? { endpoint: `https://${candidateFqdn}/api/health`, expectedStatus: 200, state: candidateHealthy ? 'passed' : candidateNativeReady ? 'checking' : 'waitingForNativeReadiness' } : null } }) }
     case 'existing':
       if (!scenario.hasExistingRuntime) return { title: 'Runtime before first deployment', format: 'JSON', body: json({ resourceId: null, appVersionId: null, state: 'no Artifact App exists yet', servingCustomerTraffic: false }) }
-      return { title: 'Existing Artifact App', format: 'JSON', body: json({ appVersionId: previousVersionId, resourceId: '/subscriptions/runtime-sub/resourceGroups/runtime-rg/providers/Microsoft.App/artifactApps/embr-existing', servingCustomerTraffic: !switched, state: cutover === 'deleted' ? 'deleted' : cutover === 'deleting' ? 'deleting' : promoted ? 'unroutedCleanupPending' : switched ? 'unroutedRetainedForVerification' : 'serving' }) }
+      return { title: settingsUpdate ? 'Running Artifact App' : 'Existing Artifact App', format: 'JSON', body: json({ appVersionId: previousVersionId, resourceId: '/subscriptions/runtime-sub/resourceGroups/runtime-rg/providers/Microsoft.App/artifactApps/embr-existing', servingCustomerTraffic: !switched, state: cutover === 'deleted' ? 'deleted' : cutover === 'deleting' ? 'deleting' : promoted ? 'unroutedCleanupPending' : switched ? 'unroutedRetainedForVerification' : 'serving', configuration: runtimeEnvironment, frozenEnvironmentFrom: previousVersionId, scale: artifactAppScale(settings.liveScaling) }) }
     case 'route':
       return { title: 'YARP route document', format: 'JSON', body: json({ projectId: 'app_shop', appLifecycleId: switched || scenario.hasExistingRuntime ? 'ali_31' : null, appVersionId: switched ? versionId : previousVersionId, appDeploymentId: switched ? deploymentId : scenario.hasExistingRuntime ? 'adp_previous' : null, state: switched || scenario.hasExistingRuntime ? 'assigned' : 'not created', hostnameGeneratedBy: 'SubdomainHelper.ComputeAppSubdomain(appName, appId, routingDomain)', subdomain: switched || scenario.hasExistingRuntime ? demoCustomerHostname : null, vms: switched ? [`https://${candidateFqdn}/`] : scenario.hasExistingRuntime ? ['https://embr-existing.westus3.azurecontainerapps.io/'] : [], backendPrefixes: switched || scenario.hasExistingRuntime ? ['/api/'] : [], staticRouting: switched ? { reference: staticReference } : scenario.hasExistingRuntime ? { reference: 'static-assets/app_shop/ver_previous/web/site' } : null, authRevision: 12, auth: { mode: 'optional', primaryBrowserProvider: 'entraId', entraId: { enabled: true, applicationMode: 'customer', customerApplication: { clientId: '11111111-2222-3333-4444-555555555555', homeTenantId: '72f988bf-86f1-41af-91ab-2d7cd011db47', signInMode: 'organizations', workloadIdentityResourceId: '/subscriptions/.../userAssignedIdentities/builder-auth', allowedAudiences: ['api://11111111-2222-3333-4444-555555555555'] }, callbackHost: demoCustomerHostname, browserApplicationGeneration: 2, emails: [], emailSuffixes: ['@contoso.com'], objectIds: [], tenantIds: ['72f988bf-86f1-41af-91ab-2d7cd011db47'] } } }) }
     case 'customer':

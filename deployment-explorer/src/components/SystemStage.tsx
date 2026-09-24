@@ -35,6 +35,7 @@ import {
   type PayloadKind,
   type Scenario,
 } from '../model'
+import { baseScaling, formatScaling } from '../configuration'
 
 interface SystemStageProps {
   scenario: Scenario
@@ -148,6 +149,18 @@ function transferGeometry(source: NodeId, target: NodeId, stageWidth: number) {
 function providerState(cutover: CutoverState, scenario: Scenario) {
   const old = scenario.oldVersion ?? 'previous version'
   const next = scenario.newVersion
+  if (scenario.kind !== 'deploy') {
+    return {
+      old: `Serving 100% - ${old}`,
+      next: 'Not needed',
+      oldTone: 'serving',
+      nextTone: 'empty',
+      target: `${old} stays live`,
+      note: scenario.kind === 'scale'
+        ? `Scaling updates the running ${old} Artifact App in place. No candidate, Deployment, or route change.`
+        : `The running ${old} Artifact App is untouched. The next AppVersion captures the saved value.`,
+    }
+  }
   if (!scenario.hasExistingRuntime) {
     switch (cutover) {
       case 'candidate':
@@ -217,7 +230,7 @@ function NodeButton({
   const dimmed = Boolean(step && !active && !context && !selected)
   const provider = providerState(cutover, scenario)
   const completedIds = new Set(scenario.steps.slice(0, completedCount).map((item) => item.id))
-  const retainedVersion = scenario.id === 'commit' || scenario.id === 'redeploy' || scenario.id === 'activate'
+  const retainedVersion = scenario.kind !== 'deploy' || scenario.id === 'commit' || scenario.id === 'redeploy' || scenario.id === 'activate'
   const versionCreated = retainedVersion || completedIds.has('create-version')
   const deploymentCreated = completedIds.has('create-deployment')
     || [...completedIds].some((item) => item.endsWith('-create-deployment'))
@@ -250,9 +263,11 @@ function NodeButton({
           ? { text: 'Pending', tone: 'ready' }
           : { text: 'Not created', tone: 'idle' }
       : id === 'deployment'
-        ? deploymentCreated
-          ? deploymentStatus
-          : { text: 'Not created', tone: 'idle' }
+        ? scenario.kind !== 'deploy'
+          ? { text: 'Not needed', tone: 'empty' }
+          : deploymentCreated
+            ? deploymentStatus
+            : { text: 'Not created', tone: 'idle' }
         : id === 'customer'
           ? !scenario.hasExistingRuntime && !['switched', 'verified', 'active', 'cleanupPending', 'deleting', 'deleted'].includes(cutover)
             ? { text: 'No route yet', tone: 'idle' }
@@ -434,26 +449,28 @@ export function SystemStage({
               </span>
             ) : null}
           </div>
-          <h2 id="active-step-title">{step?.title ?? 'Deployment complete'}</h2>
+          <h2 id="active-step-title">{step?.title ?? (scenario.kind === 'deploy' ? 'Deployment complete' : 'Settings update complete')}</h2>
         </div>
         <div className="step-progress" aria-label={`${stepIndex} of ${scenario.steps.length} steps complete`}>
           <span style={{ width: `${(stepIndex / scenario.steps.length) * 100}%` }} />
         </div>
       </header>
 
-      <div className="starting-state" aria-label="State before this deployment">
+      <div className="starting-state" aria-label="State before this flow">
         <span>Before this flow</span>
         <strong>Builder App already exists</strong>
         <i>GitHub source configured + authorized</i>
         <i>Easy Auth optional · BYO Entra</i>
         <i>{scenario.hasExistingRuntime ? `${scenario.oldVersion} currently active` : 'No active AppVersion'}</i>
         {!scenario.hasExistingRuntime ? <i>No YARP backend assigned</i> : null}
+        <i className="config-fact version-fact">versionConfiguration: API_URL={scenario.kind === 'config' ? 'legacy.contoso.com' : 'api.contoso.com'}</i>
+        <i className="config-fact scaling-fact">scaling: api {formatScaling(baseScaling)}</i>
       </div>
 
       <div className="transfer-brief" aria-live="polite">
         <div>
           <span>{isAnimating ? 'Happening now' : 'What happens now'}</span>
-          <strong>{step?.reason ?? 'All deployment work has completed.'}</strong>
+          <strong>{step?.reason ?? (scenario.kind === 'deploy' ? 'All deployment work has completed.' : 'The settings update has completed.')}</strong>
           {step ? (
             <p className="transfer-route">
               <b>{sourceLabel}</b>
@@ -465,7 +482,7 @@ export function SystemStage({
         </div>
         <div>
           <span>State after this step</span>
-          <strong>{step?.result ?? 'Deployment succeeded and cleanup is complete.'}</strong>
+          <strong>{step?.result ?? (scenario.kind === 'deploy' ? 'Deployment succeeded and cleanup is complete.' : scenario.kind === 'scale' ? 'Scaling saved and applied to the running app; no version changed.' : 'Desired configuration saved for the next AppVersion; the running app is unchanged.')}</strong>
         </div>
       </div>
 

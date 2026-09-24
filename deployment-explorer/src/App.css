@@ -128,7 +128,7 @@
 .scenario-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; padding: 12px; border-bottom: 1px solid var(--line); }
 .scenario-list button { justify-content: flex-start; min-width: 0; min-height: 42px; padding: 7px 8px; font-size: 10px; }
 .scenario-list button[aria-selected="true"] { color: #fff; background: var(--ink); border-color: var(--ink); }
-.scenario-list button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scenario-list button span { overflow: hidden; line-height: 1.15; text-align: left; }
 .rail-heading { display: flex; justify-content: space-between; align-items: center; padding: 13px 14px 9px; }
 .rail-heading span { color: var(--muted); font: 900 8px/1 var(--mono); text-transform: uppercase; }
 .rail-heading strong { color: var(--ink-soft); font: 800 9px/1 var(--mono); }
@@ -182,6 +182,8 @@
 .starting-state span { color: var(--green); font: 900 7px/1 var(--mono); text-transform: uppercase; }
 .starting-state strong { font-size: 11px; }
 .starting-state i { padding-left: 9px; color: var(--muted); border-left: 1px solid #a8bcb3; font: 700 8px/1 var(--mono); font-style: normal; }
+.starting-state i.version-fact { color: #2354b4; }
+.starting-state i.scaling-fact { color: #875800; }
 
 .transfer-brief { display: grid; grid-template-columns: minmax(360px, 1.2fr) minmax(260px, .8fr); min-height: 108px; color: var(--ink); background: #fffdf8; border-bottom: 1px solid var(--line-strong); }
 .transfer-brief > div { padding: 13px 15px 11px; border-right: 1px solid var(--line); }

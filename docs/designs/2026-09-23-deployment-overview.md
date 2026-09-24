@@ -76,14 +76,15 @@ not live telemetry or controls that mutate the stamp.
 
 ### Verification Results
 
-- 93 Vitest tests pass, including the unified Overview, configuration lifecycles,
-  and technical map-fit tests.
+- 85 Vitest tests pass, covering both configuration lifecycles, every deploy journey,
+  the settings scenarios in both views, playback, and Technical map fit.
 - TypeScript/Vite production build and Oxlint pass.
-- Playwright verified all five journeys, health-before-traffic ordering, release
-  success before cleanup, view switching, keyboard navigation, and pause.
-- No clipped controls or horizontal overflow at 320, 390, 820, and 1440px.
-- Reduced-motion behavior passes. Axe reports no WCAG A/AA or best-practice
-  violations in the Overview at desktop and mobile sizes.
+- Playwright verified all seven scenarios, health-before-traffic ordering, release
+  success before cleanup, view switching, keyboard stage navigation, and pause.
+- No clipped content or horizontal overflow at 390, 1024, 1280, 1366, and 1440px;
+  1280x720, 1366x768, and 1440x900 fit without vertical scrolling.
+- Reduced motion hides payloads and stops line motion. Axe reports no violations in the
+  Overview for first deploy, activation, version-config, and scaling scenarios.
 
 ## Rollout Plan
 
@@ -95,112 +96,60 @@ before deploying. Do not modify Embr platform services or unrelated demo apps.
 ## Definition of Done
 
 - Design approved.
-- All five flows have accurate, readable high-level journeys.
+- All five deploy flows and both settings changes have accurate, readable journeys.
 - Existing technical scenarios and inspection remain functional.
 - Tests, build, lint, desktop/mobile, and keyboard checks pass.
 - Existing amahmoud11 public URL serves the verified update.
 
-## Configuration Story
+## Configuration in the Flow
 
-Status: Technical walkthrough retained; Overview superseded by the unified design below.
+A running Artifact App always combines two settings, and the canvas draws each one where it
+enters the flow:
 
-Add a shared Deployment / Configuration story selector to both Overview and Technical.
-Keep existing deployment scenarios and map-fit controls. Configuration is illustrative
-playback, not a form that changes stamp settings.
+- Version configuration: `versionConfiguration.variables` on the Builder App is desired state.
+  Creating an AppVersion snapshots it with the commit and `builder.yaml`; the build and the
+  Artifact App both use that frozen copy. Saving a new value makes no provider call and creates
+  no AppVersion or Deployment. Deploy commit reuses a retained version only when the complete
+  desired configuration matches. Redeploy and activation use the selected version's own values.
+- Scaling: `scaling` is current Builder App policy and is never frozen. Every new Artifact App
+  gets the current policy. Changing it saves the policy and sends one complete `PUT` to the
+  active Artifact App, replacing only its scale block. There is no build, AppVersion,
+  Deployment, or route change.
 
-Use two visibly labeled paths, not explanatory paragraphs:
+The example variable is `API_URL`: v16 froze `legacy.contoso.com`, and later versions use
+`api.contoso.com`. Scaling for `api` is 1–3 replicas at 70% CPU, changed to 2–6 at 60%.
 
-- Version configuration: desired app values -> immutable AppVersion snapshot -> active
-  version. Show a plain build/runtime variable changing from USD to EUR. Editing desired
-  values does not mutate the active version; creating and deploying v2 captures the edit.
-- App settings: one app-wide policy -> whichever version is active. Show scaling moving
-  from a 1-2 replica CPU policy to a 2-5 replica policy, applying without a new AppVersion or
-  build. Activating v1 restores its USD snapshot but retains the newer scaling policy.
+Overview: a settings band holds both values. Version config drops into the AppVersion.
+Scaling drops into the Artifact App being created, or into the live app during a scaling
+change. Blue marks the version and its frozen config, amber marks scaling, and green marks
+live traffic. Each Artifact App slot shows its version, frozen `API_URL`, and replica range.
+Activation marks the desired value as unused. Change version config and Change scaling are
+scenarios in the same selector.
 
-Playback stages: initial v1, edit desired version configuration, create v2 snapshot,
-activate v2, change scaling policy, confirm policy application, activate retained v1.
-Desired, captured, and active states remain visibly distinct. App-wide settings use a
-different icon and label as well as color; independence does not imply instant application.
+Technical: the same settings scenarios show ARM, Regional, persistence, and provider steps.
+The starting state lists both settings. Example JSON shows desired values on the Builder App,
+frozen values on AppVersions and Deployments, and frozen environment plus current scale on
+Artifact Apps.
 
-Overview shows short names, values, arrows, and version locks. Technical shows the same
-state with BuilderApp.versionConfiguration, AppVersion.configuration, BuilderApp.scaling,
-and read-only runtime.versionConfiguration, plus compact example JSON. Switching view
-retains the selected configuration stage and pauses playback.
+Out of scope: compute sizing, scale-to-zero, and Easy Auth, identity, or automation updates.
 
-Scope: variables are confirmed in current main. App-level scaling follows the aligned
-scaling feature contract (Q:/embr-final-pr1634); current main does not yet include that
-feature. Do not invent a public appSettings object, include unsettled compute sizing,
-claim autoscaling is live telemetry, or include scale-to-zero. Auth/identity/automation
-may be labeled as other app-owned settings but are not simulated update flows.
-
-Local hypothesis: a single shared, deterministic configuration story can demonstrate
-that version activation changes the frozen configuration but never rewinds app policy.
-Tests will disconfirm this if editing desired values changes v1, policy changes create
-versions, or restoring v1 resets the policy. Both views must project the same state.
-
-Implementation: add a focused configuration model and shared story component/styles;
-integrate with existing playback and view navigation; reuse current model and App tests.
-Update the existing docs only. Preserve and verify the pending map-fit changes.
-
-Verification: focused lifecycle and interaction tests, full demo tests, build/lint,
-laptop map-fit checks, desktop/mobile screenshots, keyboard/reduced-motion and axe checks,
-then deploy the existing demo branch to amahmoud11 and verify both views live.
-
-Verified locally: all seven configuration stages in both views; exact technical JSON;
-separate configuration and deployment progress; capture and policy payload motion;
-keyboard navigation; reduced motion; zero axe violations with the inspector open at
-390px and 1366px. No clipping at 320, 390, 820, 1280, and 1366px. The deployment map fits
-1280x720, 1366x768, and 1440x900, supports manual zoom across steps, and still opens nodes.
+Local hypothesis: projecting both settings from the shared scenario steps keeps both views
+consistent. Tests will disconfirm this if a settings save creates a version or Deployment,
+activation rewinds scaling, or a new Artifact App lacks frozen variables or current scaling.
 
 <details>
 <summary>Contract provenance</summary>
 
-- Current main inspected: `6ae2394c698b1b3098bc3e0d6172d7517526be63`.
-  `src/Embr.Contracts/Global/Models/AppVersionConfiguration.cs` defines non-secret
-  build/runtime variables and a defensive snapshot; `BuilderApp.cs` stores desired
-  configuration, while `AppRuntime.cs` reports the active version configuration.
-- Aligned scaling feature inspected: `4fe3d43bc7ec017ff7476a1db0318821f36cd162`.
-  `src/Embr.Contracts/Global/Models/AppScaling.cs` defines app-owned, per-component
-  min/max replica and CPU/memory targets; `BuilderApp.cs` stores them as `scaling`,
-  separately from `versionConfiguration`. The example uses valid 1-2 and 2-5 ranges.
+Inspected Embr main at `e1676dea9f54aae74ad24d8dbe562e86cc8ed218`:
+
+- `docs/designs/2026-09-14-builder-app-version-lifecycle.md` and
+  `docs/designs/2026-09-10-builder-app-resource-autoscaling.md` define the two lifecycles.
+- `ArtifactAppCandidateRequestFactory.Create(version, runtimePolicy)` builds each Artifact App
+  request from the AppVersion's frozen variables and the app's current scaling.
+- `AppVersionBuildExecutionService` passes the same frozen variables to the build.
+- `BuilderAppService.UpdateAppAsync` only persists `versionConfiguration`. For `scaling`, it
+  also calls `AppScalingService.ApplyAsync`, which uses `ArtifactAppRuntimeProvider.ApplyScalingAsync`.
+- ARM `PUT .../builderApps/{name}` carries both settings and returns 200; `PATCH` covers only
+  identity and source. `builder app scale` sends that `PUT`.
 
 </details>
-
-Alternative: inline configuration badges on every deployment node are smaller, but do
-not demonstrate what editing, capture, and rollback do. A separate static reference
-table is easy to scan but would lose the interactive lifecycle story.
-
-## Unified Overview
-
-User-directed redesign, 2026-09-24: Overview must be one cohesive canvas, with no
-Deployment / Configuration menu. Keep the separate detailed walkthrough in Technical.
-
-Overview has one deployment scenario selector and shared playback. Three unframed
-areas show release inputs, build/delivery, and the running app. Desired version
-configuration is captured alongside source and visibly travels with the release.
-The running app shows its active version and frozen values. A compact app-policy
-path connects scaling directly to the runtime rather than through an AppVersion.
-One inline scaling command demonstrates pending/applying policy without advancing
-the deployment, creating a version, or rebuilding. Applied policy survives scenario
-changes and version activation. The preview and illustrative-data boundary remains.
-
-Keep the OCI/ACR/ADC handoffs, health gate, static output route, customer traffic,
-and cleanup visible with short labels. Reduce repeated headings, prose, controls,
-and navigation. The current operation has one concise caption. Laptop-first fit
-and responsive vertical flow remain required, as do keyboard and reduced-motion support.
-
-Old Overview configuration links resolve to the unified Overview, not a hidden
-second page. Technical configuration links remain supported. Switching away from
-Overview cancels deployment animation; policy application remains app-owned.
-
-Local check: projection tests must prove that configuration is captured before
-build, the active value changes only with route cutover, retained-version activation
-does not copy desired edits, and app-policy updates do not change deployment progress.
-Browser checks must show both configuration scopes and the release flow together
-without clipping at laptop sizes, with no Overview story selector.
-
-Implemented checks: all five scenarios at 320, 390, 768, 1024, 1280, and 1440px;
-inline scaling leaves the release stationary and persists through retained-version
-activation; old Overview configuration links resolve to the combined canvas.
-Keyboard navigation, payload motion, reduced motion, and Overview axe audits pass.
-Technical map fit and its dedicated configuration walkthrough remain functional.

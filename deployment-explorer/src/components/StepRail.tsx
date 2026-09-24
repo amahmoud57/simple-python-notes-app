@@ -1,4 +1,4 @@
-import { Check, Circle, GitBranch, GitCommitHorizontal, PackageCheck, RefreshCw, Rocket } from 'lucide-react'
+import { Check, Circle, GitBranch, GitCommitHorizontal, LockKeyhole, PackageCheck, RefreshCw, Rocket, SlidersHorizontal } from 'lucide-react'
 import { phaseLabels, type Scenario } from '../model'
 
 interface StepRailProps {
@@ -15,6 +15,8 @@ const scenarioIcons = {
   commit: GitCommitHorizontal,
   redeploy: RefreshCw,
   activate: PackageCheck,
+  config: LockKeyhole,
+  scale: SlidersHorizontal,
 }
 
 export function StepRail({ scenarios, scenario, completedCount, onScenarioChange, onStepSelect }: StepRailProps) {
@@ -39,7 +41,7 @@ export function StepRail({ scenarios, scenario, completedCount, onScenarioChange
       </div>
 
       <div className="rail-heading">
-        <span>Deployment sequence</span>
+        <span>{scenario.kind === 'deploy' ? 'Deployment sequence' : 'Settings update sequence'}</span>
         <strong>{scenario.steps.length} steps</strong>
       </div>
 
