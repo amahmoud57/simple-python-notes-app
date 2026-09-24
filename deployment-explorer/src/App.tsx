@@ -20,7 +20,7 @@ import {
   getScenario,
   scenarioGroups,
   scenarios,
-  type NodeId,
+  type InspectId,
   type Scenario,
 } from './model'
 import { getOverviewState } from './overview'
@@ -47,7 +47,7 @@ function App() {
   const [isAnimating, setIsAnimating] = useState(false)
   const [travelStarted, setTravelStarted] = useState(false)
   const [speed, setSpeed] = useState(0.75)
-  const [selectedNode, setSelectedNode] = useState<NodeId | null>(null)
+  const [selectedNode, setSelectedNode] = useState<InspectId | null>(null)
   const scenario = getScenario(scenarioId)
   const usesStages = view === 'overview'
   const activeStep = scenario.steps[completedCount]
@@ -146,7 +146,7 @@ function App() {
     setIsPlaying(false)
     setIsAnimating(false)
     setTravelStarted(false)
-    setSelectedNode(null)
+    if (view === 'technical') setSelectedNode(null)
     setCompletedCount(Math.max(0, Math.min(index, scenario.steps.length - 1)))
   }
 
@@ -164,7 +164,7 @@ function App() {
         : 'Ready'
 
   return (
-    <div className={`app-shell view-${view}`}>
+    <div className={`app-shell view-${view}${selectedNode ? ' has-inspector' : ''}`}>
       <header className="app-header">
         <div className="brand">
           <span className="brand-mark" aria-hidden="true"><i /><i /><i /></span>
@@ -258,6 +258,8 @@ function App() {
           completedCount={completedCount}
           isAnimating={isAnimating}
           motionDurationMs={motionDurationMs}
+          selectedTarget={selectedNode}
+          onInspect={setSelectedNode}
           onMilestoneSelect={selectStep}
           onTechnicalView={() => selectView('technical')}
         />
@@ -285,7 +287,7 @@ function App() {
       )}
       </main>
 
-      {view === 'technical' && selectedNode ? (
+      {selectedNode ? (
         <DetailDrawer
           key={`${scenario.id}-${selectedNode}`}
           nodeId={selectedNode}

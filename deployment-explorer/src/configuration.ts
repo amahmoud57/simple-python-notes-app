@@ -13,9 +13,9 @@ export interface ScalingPolicy {
 }
 
 export const baseScaling: ScalingPolicy = { minReplicas: 1, maxReplicas: 3, cpuUtilizationPercent: 70 }
-export const updatedScaling: ScalingPolicy = { minReplicas: 2, maxReplicas: 6, cpuUtilizationPercent: 60 }
 
-export type DesiredConfigurationUse = 'captured' | 'matched' | 'unused' | 'saved' | 'idle'
+/** Deploy freezes the desired value into its new AppVersion; activate and redeploy reuse a version's own. */
+export type DesiredConfigurationUse = 'captured' | 'unused'
 
 /** The API_URL that each illustrative AppVersion froze when it was created. */
 export function versionHost(version: string | null): string | null {
@@ -47,26 +47,13 @@ export function formatScaling(policy: ScalingPolicy) {
   return `${policy.minReplicas}–${policy.maxReplicas} replicas · CPU ${policy.cpuUtilizationPercent}%`
 }
 
-export function getConfigurationState(scenario: Scenario, completedCount: number) {
-  const done = new Set(scenario.steps.slice(0, completedCount).map((step) => step.id))
-  const configSaved = scenario.kind === 'config' && done.has('config-persist')
-  const scalingSaved = scenario.kind === 'scale' && done.has('scale-persist')
-  const desiredUse: DesiredConfigurationUse = scenario.kind === 'config'
-    ? 'saved'
-    : scenario.kind === 'scale'
-      ? 'idle'
-      : scenario.id === 'redeploy' || scenario.id === 'activate'
-        ? 'unused'
-        : scenario.id === 'commit' ? 'matched' : 'captured'
-
+export function getConfigurationState(scenario: Scenario) {
+  const desiredUse: DesiredConfigurationUse = scenario.action === 'deploy' ? 'captured' : 'unused'
   return {
-    desiredHost: scenario.kind === 'config' && !configSaved ? legacyApiHost : currentApiHost,
-    previousDesiredHost: configSaved ? legacyApiHost : null,
+    desiredHost: currentApiHost,
     desiredUse,
-    scaling: scalingSaved ? updatedScaling : baseScaling,
-    previousScaling: scalingSaved ? baseScaling : null,
-    liveScaling: scenario.kind === 'scale' && done.has('scale-apply') ? updatedScaling : baseScaling,
+    scaling: baseScaling,
     liveHost: versionHost(scenario.oldVersion),
-    nextHost: scenario.kind === 'deployment' ? versionHost(scenario.newVersion) : null,
+    nextHost: versionHost(scenario.newVersion),
   }
 }

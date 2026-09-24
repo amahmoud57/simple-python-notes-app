@@ -1,5 +1,5 @@
 import { completionLabel, getCutoverState, type Scenario } from './model'
-import { currentApiHost, formatScaling, legacyApiHost, updatedScaling, versionHost } from './configuration'
+import { currentApiHost, legacyApiHost, versionHost } from './configuration'
 
 export type OverviewMilestoneId =
   | 'select'
@@ -11,11 +11,9 @@ export type OverviewMilestoneId =
   | 'release'
   | 'verify'
   | 'cleanup'
-  | 'save'
-  | 'apply'
 
 /** Builder CLI timeline phases; deploy and activate share them, activation marks Build as reused. */
-export type TimelinePhase = 'queue' | 'build' | 'provision' | 'verify' | 'route' | 'cleanup' | 'update'
+export type TimelinePhase = 'queue' | 'build' | 'provision' | 'verify' | 'route' | 'cleanup'
 
 export const timelinePhaseLabels: Record<TimelinePhase, string> = {
   queue: 'Queue',
@@ -24,7 +22,6 @@ export const timelinePhaseLabels: Record<TimelinePhase, string> = {
   verify: 'Verify',
   route: 'Route',
   cleanup: 'Cleanup',
-  update: 'Resource update · no Deployment',
 }
 
 export interface OverviewMilestone {
@@ -48,39 +45,7 @@ function withBoundaries(scenario: Scenario, boundaries: number[], milestones: Mi
   return milestones.map((milestone, index) => ({ ...milestone, start: boundaries[index], end: boundaries[index + 1] }))
 }
 
-function settingsMilestones(scenario: Scenario): OverviewMilestone[] {
-  const step = (id: string) => scenario.steps.findIndex((item) => item.id === id) + 1
-  if (scenario.kind === 'config') {
-    return withBoundaries(scenario, [0, step('config-persist')], [{
-      id: 'save',
-      phase: 'update',
-      label: 'Save',
-      title: 'Save API_URL for the next deploy.',
-      description: `No Deployment. The running v16 keeps ${legacyApiHost}.`,
-    }])
-  }
-
-  return withBoundaries(scenario, [0, step('scale-persist'), step('scale-apply')], [
-    {
-      id: 'save',
-      phase: 'update',
-      label: 'Save',
-      title: 'Save the new scaling.',
-      description: `${formatScaling(updatedScaling)}, stored on the Builder App, not in any AppVersion.`,
-    },
-    {
-      id: 'apply',
-      phase: 'update',
-      label: 'Apply live',
-      title: 'Apply it to the running app.',
-      description: 'No Deployment. Embr updates v17 in place: same version, same variables, new scale.',
-    },
-  ])
-}
-
 export function getOverviewMilestones(scenario: Scenario): OverviewMilestone[] {
-  if (scenario.kind !== 'deployment') return settingsMilestones(scenario)
-
   const builds = scenario.steps.some((step) => step.phase === 'building')
   const operationIndex = scenario.steps.findIndex((step) => step.target === 'deployment')
   const webReadyEnd = scenario.steps.findIndex((step) => step.id === 'publish-static') + 1
@@ -95,13 +60,11 @@ export function getOverviewMilestones(scenario: Scenario): OverviewMilestone[] {
   const old = version(scenario.oldVersion)
   const host = versionHost(next)
 
-  const select: MilestoneCopy = scenario.id === 'commit'
-    ? { id: 'select', phase: 'queue', label: `Match ${next}`, title: `Deploy finds an exact match: ${next}.`, description: `Commit 71ab42d with the current API_URL=${host} was already built as ${next}.` }
-    : scenario.id === 'redeploy'
-      ? { id: 'select', phase: 'queue', label: `Pick ${next}`, title: `Redeploy starts from the active version, ${next}.`, description: 'No source and no build. Same code and config on a fresh Artifact App.' }
-      : scenario.id === 'activate'
-        ? { id: 'select', phase: 'queue', label: `Pick ${next}`, title: `Activate starts from a built version, ${next}.`, description: `No source and no build. ${next} brings its own frozen API_URL=${host}.` }
-        : { id: 'select', phase: 'queue', label: `Create ${next}`, title: `Deploy starts from source: create ${next}.`, description: `Main resolves to a commit, frozen with builder.yaml and API_URL=${host} as AppVersion ${next}.` }
+  const select: MilestoneCopy = scenario.id === 'redeploy'
+    ? { id: 'select', phase: 'queue', label: `Pick ${next}`, title: `Redeploy starts from the active version, ${next}.`, description: 'No source and no build. Same code and config on a fresh Artifact App.' }
+    : scenario.id === 'activate'
+      ? { id: 'select', phase: 'queue', label: `Pick ${next}`, title: `Activate starts from a built version, ${next}.`, description: `No source and no build. ${next} brings its own frozen API_URL=${host}.` }
+      : { id: 'select', phase: 'queue', label: `Create ${next}`, title: `Deploy starts from source: create ${next}.`, description: `Main resolves to a commit. Its builder.yaml and API_URL=${host} are frozen into AppVersion ${next}.` }
 
   return withBoundaries(scenario, boundaries, [
     select,
@@ -123,18 +86,12 @@ export function getOverviewMilestones(scenario: Scenario): OverviewMilestone[] {
 const completion: Record<Scenario['id'], string> = {
   manual: `Code and API_URL=${currentApiHost} from v1. Scaling from the app.`,
   latest: `v17 brought API_URL=${currentApiHost}. v16 stays available to activate.`,
-  commit: 'Deploy reused v18 without a build: same commit, same config.',
   redeploy: 'Same version and frozen config in a fresh Artifact App.',
   activate: `v16's own API_URL=${legacyApiHost} came back. Scaling stayed current.`,
-  config: `Only the next deploy captures ${currentApiHost}; activating a version never does.`,
-  scale: 'Every later deploy or activation uses this policy too.',
 }
 
-const completionTitle = (scenario: Scenario, live: string) => scenario.id === 'config'
-  ? 'Saved for the next deploy.'
-  : scenario.id === 'scale'
-    ? `${live} now scales 2–6.`
-    : `${completionLabel(scenario)}. ${live} is live${scenario.id === 'activate' ? ' again' : ''}.`
+const completionTitle = (scenario: Scenario, live: string) =>
+  `${completionLabel(scenario)}. ${live} is live${scenario.id === 'activate' ? ' again' : ''}.`
 
 export function getOverviewState(scenario: Scenario, completedCount: number) {
   const milestones = getOverviewMilestones(scenario)

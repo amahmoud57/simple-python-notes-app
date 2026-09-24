@@ -7,15 +7,15 @@
 
 ## Problem Statement
 
-The Deployment Explorer explains five deployment flows through individual API calls,
+The Deployment Explorer explains four deployment flows through individual API calls,
 resources, and state transitions. PM and VP demos need the same accurate story at
 the customer-outcome level without losing access to the technical view.
 
 ## Proposed Solution
 
 Add an Overview view alongside the existing Technical view. Open Overview by default
-and support direct links to either view. Keep all five existing deployment scenarios:
-first deploy, deploy latest, deploy commit, redeploy, and activate version.
+and support direct links to either view. Keep four deployment scenarios: first deploy,
+deploy, activate previous version, and redeploy.
 
 Make the deployment path the primary visual: source, build sandbox, OCI packaging
 and ACR, ADC Artifact, Artifact App, health checks, YARP, and customer URL. Each
@@ -58,7 +58,7 @@ shows the candidate serving before the existing route-activation boundary.
 
 ## Implementation Plan
 
-1. Add milestone projection and focused tests for all five scenarios.
+1. Add milestone projection and focused tests for all four scenarios.
 2. Add Overview and view navigation; retain the technical controls and inspect drawer.
 3. Test playback, view changes, keyboard access, reduced motion, and responsive layout.
 4. Build and lint; commit/push only with approval, then deploy this demo app to amahmoud11.
@@ -76,18 +76,19 @@ not live telemetry or controls that mutate the stamp.
 
 ### Verification Results
 
-- 100 Vitest tests pass, covering commands and Deployment actions, the shared CLI timeline,
+- 87 Vitest tests pass, covering commands and Deployment actions, the shared CLI timeline,
   both configuration lifecycles, the `builder.yaml` contract, per-component build order, Deployment
-  document timing, every deploy journey, settings scenarios in both views, playback, and
-  Technical map fit.
+  document timing, every deploy journey, Overview JSON inspection, playback, and Technical map fit.
 - TypeScript/Vite production build and Oxlint pass.
-- Playwright verified all seven scenarios, health-before-traffic ordering, release
-  success before cleanup, view switching, keyboard stage navigation, and pause.
+- Playwright verified all four scenarios, health-before-traffic ordering, release
+  success before cleanup, view switching, keyboard stage navigation, and pause. Traversed lines
+  keep moving at every stage, including Health check and after completion.
 - No clipped content or horizontal overflow at 390, 1024, 1280, 1366, and 1440px;
   1280x720, 1366x768, and 1440x900 fit without vertical scrolling. Every command is fully
-  visible at 1280 and 1366px.
-- Reduced motion hides payloads and stops line motion. Axe reports no violations in 16
-  Overview states at 390 and 1366px, including rollout, cleanup, activation, and settings.
+  visible at 1280 and 1366px. With the inspector open, the map stays a canvas beside it at 1280
+  and 1366px and every element remains clickable.
+- Reduced motion hides payloads and stops line motion. Axe reports no violations in 8
+  Overview states and 8 inspector targets at 390, 1280, and 1366px.
 
 ## Rollout Plan
 
@@ -99,7 +100,7 @@ before deploying. Do not modify Embr platform services or unrelated demo apps.
 ## Definition of Done
 
 - Design approved.
-- All five deploy flows and both settings changes have accurate, readable journeys.
+- All four deploy flows have accurate, readable journeys, and their settings are inspectable.
 - Existing technical scenarios and inspection remain functional.
 - Tests, build, lint, desktop/mobile, and keyboard checks pass.
 - Existing amahmoud11 public URL serves the verified update.
@@ -112,33 +113,31 @@ enters the flow:
 - Version configuration: `versionConfiguration.variables` on the Builder App is desired state.
   Creating an AppVersion snapshots it with the commit and `builder.yaml`; the build and the
   Artifact App both use that frozen copy. Saving a new value makes no provider call and creates
-  no AppVersion or Deployment. Deploy commit reuses a retained version only when the complete
-  desired configuration matches. Redeploy and activation use the selected version's own values.
+  no AppVersion or Deployment. Redeploy and activation use the selected version's own values.
 - Scaling: `scaling` is current Builder App policy and is never frozen. Every new Artifact App
   gets the current policy. Changing it saves the policy and sends one complete `PUT` to the
   active Artifact App, replacing only its scale block. There is no build, AppVersion,
   Deployment, or route change.
 
 The example variable is `API_URL`: v16 froze `legacy.contoso.com`, and later versions use
-`api.contoso.com`. Scaling for `api` is 1–3 replicas at 70% CPU, changed to 2–6 at 60%.
+`api.contoso.com`. Scaling for `api` is 1–3 replicas at 70% CPU.
 
-Overview: a settings band holds both values. Version config drops into the AppVersion.
-Scaling drops into the Artifact App being created, or into the live app during a scaling
-change. Blue marks the version and its frozen config, amber marks scaling, and green marks
-live traffic. Each Artifact App slot shows its version, frozen `API_URL`, and replica range.
-Activation marks the desired value as unused. Change version config and Change scaling are
-scenarios in the same selector.
+Overview: a settings band holds both values. Version config drops into the AppVersion, beside
+`builder.yaml` from the commit. Scaling drops into the Artifact App being created. Blue marks the
+version and its frozen config, amber marks scaling, and green marks live traffic. Each Artifact
+App slot shows its version, frozen `API_URL`, and replica range. Activation marks the desired
+value as unused. Clicking a chip shows its JSON: the desired value beside its frozen AppVersion
+copy, or the policy beside the scale block Embr sends to ADC.
 
-Technical: the same settings scenarios show ARM, Regional, persistence, and provider steps.
-The starting state lists both settings. Example JSON shows desired values on the Builder App,
-frozen values on AppVersions and Deployments, and frozen environment plus current scale on
-Artifact Apps.
+Technical: the starting state lists both settings. Example JSON shows desired values on the
+Builder App, frozen values on AppVersions and Deployments, and frozen environment plus current
+scale on Artifact Apps.
 
 Out of scope: compute sizing, scale-to-zero, and Easy Auth, identity, or automation updates.
 
 Local hypothesis: projecting both settings from the shared scenario steps keeps both views
-consistent. Tests will disconfirm this if a settings save creates a version or Deployment,
-activation rewinds scaling, or a new Artifact App lacks frozen variables or current scaling.
+consistent. Tests will disconfirm this if activation rewinds scaling or a new Artifact App lacks
+frozen variables or current scaling.
 
 <details>
 <summary>Contract provenance</summary>
@@ -162,11 +161,12 @@ Inspected Embr main at `e1676dea9f54aae74ad24d8dbe562e86cc8ed218`:
 Deploy and activation both roll out a new Deployment, so the demo names each flow by the command
 that starts it and the Deployment `action` it records, the same way the Builder CLI does:
 
-- Deploy from source: `builder app deploy <name> [--commit <sha>]` resolves source with the
-  current version config and builds a new AppVersion unless an exact match exists.
-- Reuse a built version: `builder app version activate <name> <version-id>|--previous` reuses an
+- Deploy from source: `builder app deploy <name>` resolves the configured branch with the current
+  version config and builds a new AppVersion.
+- Reuse a built version: `builder app version activate <name> --previous` reuses the previous
   AppVersion with its own frozen config. ARM-only `POST .../redeploy` reuses the active version.
-- Change settings: version config and scaling create no Deployment.
+- Settings: version config and scaling are Builder App settings, not flows; they create no
+  Deployment.
 
 Every Deployment uses the CLI timeline phases Queue, Build, Provision, Verify, Route, and Cleanup.
 Overview groups its stages under those phases; activation and redeploy mark Build as reused, as the

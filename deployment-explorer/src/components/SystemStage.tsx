@@ -33,6 +33,7 @@ import {
   phaseLabels,
   type CutoverState,
   type FlowStep,
+  type InspectId,
   type NodeId,
   type PayloadKind,
   type Scenario,
@@ -47,7 +48,7 @@ interface SystemStageProps {
   travelStarted: boolean
   motionDurationMs: number
   cutover: CutoverState
-  selectedNode: NodeId | null
+  selectedNode: InspectId | null
   onSelectNode: (id: NodeId) => void
 }
 
@@ -151,18 +152,6 @@ function transferGeometry(source: NodeId, target: NodeId, stageWidth: number) {
 function providerState(cutover: CutoverState, scenario: Scenario) {
   const old = scenario.oldVersion ?? 'previous version'
   const next = scenario.newVersion
-  if (scenario.kind !== 'deployment') {
-    return {
-      old: `Serving 100% - ${old}`,
-      next: 'Not needed',
-      oldTone: 'serving',
-      nextTone: 'empty',
-      target: `${old} stays live`,
-      note: scenario.kind === 'scale'
-        ? `Scaling updates the running ${old} Artifact App in place. No candidate, Deployment, or route change.`
-        : `The running ${old} Artifact App is untouched. The next AppVersion captures the saved value.`,
-    }
-  }
   if (!scenario.hasExistingRuntime) {
     switch (cutover) {
       case 'candidate':
@@ -232,7 +221,7 @@ function NodeButton({
   const dimmed = Boolean(step && !active && !context && !selected)
   const provider = providerState(cutover, scenario)
   const completedIds = new Set(scenario.steps.slice(0, completedCount).map((item) => item.id))
-  const retainedVersion = scenario.kind !== 'deployment' || scenario.id === 'commit' || scenario.id === 'redeploy' || scenario.id === 'activate'
+  const retainedVersion = scenario.id === 'redeploy' || scenario.id === 'activate'
   const versionCreated = retainedVersion || completedIds.has('create-version')
   const deploymentCreated = completedIds.has('create-deployment')
     || [...completedIds].some((item) => item.endsWith('-create-deployment'))
@@ -265,11 +254,9 @@ function NodeButton({
           ? { text: 'Pending', tone: 'ready' }
           : { text: 'Not created', tone: 'idle' }
       : id === 'deployment'
-        ? scenario.kind !== 'deployment'
-          ? { text: 'Not needed', tone: 'empty' }
-          : deploymentCreated
-            ? deploymentStatus
-            : { text: 'Not created', tone: 'idle' }
+        ? deploymentCreated
+          ? deploymentStatus
+          : { text: 'Not created', tone: 'idle' }
         : id === 'customer'
           ? !scenario.hasExistingRuntime && !['switched', 'verified', 'active', 'cleanupPending', 'deleting', 'deleted'].includes(cutover)
             ? { text: 'No route yet', tone: 'idle' }
@@ -465,7 +452,7 @@ export function SystemStage({
         <i>Easy Auth optional · BYO Entra</i>
         <i>{scenario.hasExistingRuntime ? `${scenario.oldVersion} currently active` : 'No active AppVersion'}</i>
         {!scenario.hasExistingRuntime ? <i>No YARP backend assigned</i> : null}
-        <i className="config-fact version-fact">versionConfiguration: API_URL={scenario.kind === 'config' ? 'legacy.contoso.com' : 'api.contoso.com'}</i>
+        <i className="config-fact version-fact">versionConfiguration: API_URL=api.contoso.com</i>
         <i className="config-fact scaling-fact">scaling: api {formatScaling(baseScaling)}</i>
       </div>
 
@@ -484,7 +471,7 @@ export function SystemStage({
         </div>
         <div>
           <span>State after this step</span>
-          <strong>{step?.result ?? (scenario.kind === 'deployment' ? `${operationName(scenario)} succeeded and cleanup is complete.` : scenario.kind === 'scale' ? 'Scaling saved and applied to the running app; no version changed.' : 'Desired configuration saved for the next AppVersion; the running app is unchanged.')}</strong>
+          <strong>{step?.result ?? `${operationName(scenario)} succeeded and cleanup is complete.`}</strong>
         </div>
       </div>
 

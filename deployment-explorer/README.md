@@ -1,9 +1,8 @@
 # Builder App Deployment Explorer
 
-Interactive React visualization of the Embr Builder App deployment lifecycle. It covers manual
-first deploy, deploy-latest replacement, exact-commit deployment, retained-version redeploy,
-explicit AppVersion activation, and the two Builder App settings changes: version configuration
-and scaling.
+Interactive React visualization of the Embr Builder App deployment lifecycle. It covers first
+deploy, deploying the latest commit, activating the previous version, and redeploying the active
+version. Version configuration and scaling appear as clickable Builder App settings.
 
 ## Views
 
@@ -12,12 +11,9 @@ what they start from, and the command bar shows the command each one runs:
 
 | Group | Scenario | Command | Creates |
 |---|---|---|---|
-| Deploy from source | First deploy, Deploy latest | `builder app deploy <name>` | Deployment, action `deploy`; builds a new AppVersion |
-| Deploy from source | Deploy commit | `builder app deploy <name> --commit <sha>` | Deployment, action `deploy`; reuses an exact match or builds |
-| Reuse a built version | Activate version | `builder app version activate <name> <version-id>` (or `--previous`) | Deployment, action `activate`; no build |
+| Deploy from source | First deploy, Deploy | `builder app deploy <name>` | Deployment, action `deploy`; builds a new AppVersion |
+| Reuse a built version | Activate previous version | `builder app version activate <name> --previous` | Deployment, action `activate`; no build |
 | Reuse a built version | Redeploy | ARM `POST .../redeploy` (no CLI command) | Deployment, action `redeploy`; no build |
-| Change settings | Change version config | ARM `PUT` with `properties.versionConfiguration` | No Deployment |
-| Change settings | Change scaling | `builder app scale <name> --component api ...` | No Deployment |
 
 Every Deployment follows the Builder CLI timeline: Queue, Build, Provision, Verify, Route, and
 Cleanup. The stage stepper groups stages under those phases. Deploy fills Build with one stage per
@@ -28,11 +24,17 @@ Route phase of every Deployment, so the demo labels it Routing, not activation.
 
 Configuration is drawn where it enters the flow:
 
+- **builder.yaml** comes from the repository at the resolved commit and goes into the AppVersion.
 - **Version config** (`API_URL`) drops into the AppVersion with the commit and `builder.yaml`.
   It is frozen there and reaches both the build and the Artifact App. Saving a new value
   changes nothing that is running; the next deploy captures it.
 - **Scaling** drops straight into the Artifact App. Every deploy, redeploy, and activation uses
   the current policy, and changing it updates the running app in place.
+
+Click `builder.yaml`, either setting, **Builder App settings**, any map element, or **Deployment
+record** to see its JSON at the current stage. `builder.yaml` also shows the parsed manifest the
+AppVersion stores. At laptop widths the inspector docks beside the map, so every element stays
+clickable while you step through stages.
 
 The flow shows a temporary ADC build sandbox per component, the api image pushed to Embr ACR, the
 ADC Artifact whose creation makes ADC pull that image, the new Artifact App beside the live one, the
@@ -40,8 +42,9 @@ health check, the YARP switch, public verification, and cleanup. Static files go
 Retained versions skip the build; activation brings back that version's own `API_URL` while keeping
 the current scaling.
 
-Playback moves payloads along the active handoffs with one short caption. The stage stepper and
-previous/next controls share progress with Technical.
+Playback moves payloads along the active handoffs with one short caption. Lines already traversed
+keep flowing, and the current hop flows faster. The stage stepper and previous/next controls share
+progress with Technical.
 
 **Technical** retains the detailed sequence, API calls, resource examples, and inspection
 drawer for the same scenarios. Its header shows the same command, and the sequence is named

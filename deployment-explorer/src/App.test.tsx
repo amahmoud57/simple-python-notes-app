@@ -18,7 +18,7 @@ afterEach(() => {
 describe('Deployment Overview', () => {
   const selectScenario = (id: string) => fireEvent.change(screen.getByRole('combobox', { name: 'Scenario' }), { target: { value: id } })
   const slot = (container: HTMLElement, role: 'new' | 'live') => container.querySelector<HTMLElement>(`[data-slot="${role}"]`)!
-  const chip = (name: 'Version configuration' | 'Scaling policy') => screen.getByRole('group', { name })
+  const chip = (name: 'version configuration' | 'scaling policy' | 'builder.yaml') => screen.getByRole('button', { name: `Inspect ${name}` })
   const path = (container: HTMLElement, key: string) => container.querySelector(`[data-path="${key}"]`)
   const packets = (container: HTMLElement) => [...container.querySelectorAll('.ov-packet')].map((item) => item.getAttribute('data-packet'))
 
@@ -29,19 +29,22 @@ describe('Deployment Overview', () => {
     expect(screen.queryByRole('tablist', { name: 'Explorer story' })).not.toBeInTheDocument()
     expect(screen.queryByRole('tab', { name: 'Configuration' })).not.toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Deploy starts from source: create v1.' })).toBeInTheDocument()
-    expect(chip('Version configuration')).toHaveTextContent('API_URL = api.contoso.com')
-    expect(chip('Version configuration')).toHaveTextContent('Frozen into each new AppVersion')
-    expect(chip('Scaling policy')).toHaveTextContent('1–3 replicas · CPU 70%')
-    expect(chip('Scaling policy')).toHaveTextContent('Always current · applied live')
+    expect(chip('version configuration')).toHaveTextContent('API_URL = api.contoso.com')
+    expect(chip('version configuration')).toHaveTextContent('Frozen into each new AppVersion')
+    expect(chip('scaling policy')).toHaveTextContent('1–3 replicas · CPU 70%')
+    expect(chip('scaling policy')).toHaveTextContent('Always current · applied live')
+    expect(chip('builder.yaml')).toHaveTextContent('Read at the commit')
+    expect(chip('builder.yaml')).toHaveClass('state-current')
+    expect(path(container, 'yaml-version')).toHaveClass('state-current')
     expect(path(container, 'drop-version')).toHaveTextContent('frozen into v1')
     expect(path(container, 'drop-scaling-new')).toHaveTextContent('applied to v1')
     expect(path(container, 'acr-artifact')).toHaveTextContent('pull · AcrPull')
-    expect(screen.getByRole('group', { name: 'Embr ACR: OCI image registry' })).toBeInTheDocument()
-    expect(screen.getByRole('group', { name: 'No live Artifact App yet' })).toBeInTheDocument()
-    expect(screen.getByRole('group', { name: 'Customers: no app yet' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Inspect Embr ACR: OCI image registry' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Inspect No live Artifact App yet' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Inspect Customers: no app yet' })).toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: /Go to stage/ })).toHaveLength(9)
     expect(screen.getByRole('button', { name: 'Go to stage 1: Create v1' })).toHaveAttribute('aria-current', 'step')
-    expect(screen.getByRole('combobox', { name: 'Scenario' }).querySelectorAll('optgroup')).toHaveLength(3)
+    expect(screen.getByRole('combobox', { name: 'Scenario' }).querySelectorAll('optgroup')).toHaveLength(2)
     expect(container.textContent).not.toMatch(/CURRENCY|RELEASE_CHANNEL|EUR|USD/)
     expect(screen.queryByRole('button', { name: 'Inspect ARM API' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Previous stage' })).toBeDisabled()
@@ -66,7 +69,7 @@ describe('Deployment Overview', () => {
     expect(container.querySelector('.ov-canvas')).toHaveAttribute('data-route-target', 'live')
   })
 
-  it.each(scenarios.filter((item) => item.kind === 'deployment'))('moves $label traffic only after health and retires the old app last', (scenario) => {
+  it.each(scenarios)('moves $label traffic only after health and retires the old app last', (scenario) => {
     const { container } = render(<App />)
     selectScenario(scenario.id)
     const milestones = getOverviewMilestones(scenario)
@@ -97,8 +100,10 @@ describe('Deployment Overview', () => {
   it('shows retained versions bringing their own config while the desired value is not used', () => {
     const { container } = render(<App />)
     selectScenario('activate')
-    expect(chip('Version configuration')).toHaveClass('state-unused')
-    expect(chip('Version configuration')).toHaveTextContent('Not used · v16 keeps its own')
+    expect(chip('version configuration')).toHaveClass('state-unused')
+    expect(chip('version configuration')).toHaveTextContent('Not used · v16 keeps its own')
+    expect(chip('builder.yaml')).toHaveClass('state-skipped')
+    expect(chip('builder.yaml')).toHaveTextContent('Kept in v16')
     expect(path(container, 'drop-version')).toHaveClass('state-unused')
     expect(container.querySelector('[data-node="source"]')).toHaveClass('state-skipped')
     expect(container.querySelector('[data-node="build"]')).toHaveClass('state-skipped')
@@ -106,12 +111,8 @@ describe('Deployment Overview', () => {
     expect(slot(container, 'new')).toHaveTextContent('v16')
     expect(slot(container, 'new')).toHaveTextContent('legacy.contoso.com')
     expect(slot(container, 'new')).toHaveTextContent('1–3')
-    expect(slot(container, 'live')).toHaveTextContent('v18')
+    expect(slot(container, 'live')).toHaveTextContent('v17')
     expect(slot(container, 'live')).toHaveTextContent('api.contoso.com')
-    selectScenario('commit')
-    expect(chip('Version configuration')).not.toHaveClass('state-unused')
-    expect(path(container, 'drop-version')).toHaveTextContent('must match')
-    expect(screen.getByRole('button', { name: 'Go to stage 1: Match v18' })).toHaveAttribute('aria-current', 'step')
   })
 
   it('names each scenario by the command customers run and the Deployment it creates', () => {
@@ -126,7 +127,7 @@ describe('Deployment Overview', () => {
     expect(phaseStages('Build')).toEqual(['Go to stage 2: Build web', 'Go to stage 3: Build api'])
 
     selectScenario('activate')
-    expect(command()).toHaveTextContent('CLIbuilder app version activate <name> ver_16')
+    expect(command()).toHaveTextContent('CLIbuilder app version activate <name> --previous')
     expect(command()).toHaveTextContent('New Deployment (action: activate) · reuses v16 · no build')
     expect(screen.getByRole('list', { name: 'Activation timeline' })).toBeInTheDocument()
     expect(phases()).toEqual(['stage-phase-queue', 'stage-phase-build', 'stage-phase-provision', 'stage-phase-verify', 'stage-phase-route', 'stage-phase-cleanup'])
@@ -141,60 +142,51 @@ describe('Deployment Overview', () => {
     expect(command()).toHaveTextContent('no CLI command')
     expect(screen.getByRole('list', { name: 'Redeploy timeline' })).toBeInTheDocument()
 
-    selectScenario('scale')
-    expect(command()).toHaveTextContent('CLIbuilder app scale <name> --component api --min 2 --max 6 --cpu-percent 60')
-    expect(command()).toHaveTextContent('No Deployment')
-    expect(screen.getByRole('list', { name: 'Settings update timeline' })).toBeInTheDocument()
-    expect(phases()).toEqual(['stage-phase-update'])
-    expect(screen.getByText('Resource update · no Deployment')).toBeInTheDocument()
-
     const groups = [...screen.getByRole('combobox', { name: 'Scenario' }).querySelectorAll('optgroup')].map((group) => [group.label, [...group.querySelectorAll('option')].map((option) => option.textContent)])
     expect(groups).toEqual([
-      ['Deploy from source', ['First deploy', 'Deploy latest', 'Deploy commit']],
-      ['Reuse a built version', ['Activate version', 'Redeploy']],
-      ['Change settings (no Deployment)', ['Change version config', 'Change scaling']],
+      ['Deploy from source', ['First deploy', 'Deploy']],
+      ['Reuse a built version', ['Activate previous version', 'Redeploy']],
     ])
   })
 
-  it('saves version config for the next version without touching the running app', () => {
+  it('opens JSON for builder.yaml, settings, map elements, and the Deployment without leaving the Overview', () => {
     const { container } = render(<App />)
-    selectScenario('config')
-    expect(screen.getAllByRole('button', { name: /Go to stage/ })).toHaveLength(1)
-    expect(chip('Version configuration')).toHaveTextContent('API_URL = legacy.contoso.com')
-    fireEvent.click(screen.getByRole('button', { name: 'Next stage' }))
-    expect(screen.getByRole('heading', { name: 'Saved for the next deploy.' })).toBeInTheDocument()
-    expect(chip('Version configuration')).toHaveTextContent('API_URL = api.contoso.com')
-    expect(chip('Version configuration')).toHaveTextContent('Saved · was legacy.contoso.com')
-    expect(container.querySelector('.ov-version-card')).toHaveTextContent('next')
-    expect(path(container, 'drop-version')).toHaveTextContent('waits for next version')
-    expect(slot(container, 'live')).toHaveTextContent('v16')
-    expect(slot(container, 'live')).toHaveTextContent('legacy.contoso.com')
-    expect(slot(container, 'new')).toHaveAttribute('data-slot-state', 'none')
-    expect(container.querySelector('[data-node="build"]')).toHaveClass('state-idle')
-    expect(chip('Scaling policy')).toHaveClass('state-idle')
-    expect(container.querySelector('.ov-canvas')).toHaveAttribute('data-route-target', 'live')
-  })
+    const drawer = () => screen.getByRole('complementary', { name: /./ })
+    const codeBlocks = () => [...container.querySelectorAll('.detail-code code')].map((block) => block.textContent ?? '')
+    const headings = () => [...container.querySelectorAll('.detail-code-heading span')].map((heading) => heading.textContent)
 
-  it('applies scaling to the running app in place with no build, version, or traffic switch', () => {
-    const { container } = render(<App />)
-    selectScenario('scale')
-    expect(screen.getAllByRole('button', { name: /Go to stage/ }).map((button) => button.getAttribute('aria-label'))).toEqual(['Go to stage 1: Save', 'Go to stage 2: Apply live'])
-    expect(path(container, 'drop-scaling-new')).not.toBeInTheDocument()
+    fireEvent.click(chip('builder.yaml'))
+    expect(drawer()).toHaveTextContent('builder.yaml')
+    expect(chip('builder.yaml')).toHaveAttribute('aria-pressed', 'true')
+    expect(headings()).toEqual(['builder.yaml', 'Parsed manifest the AppVersion will store'])
+    expect(codeBlocks()[0]).toContain('components:')
+    expect(JSON.parse(codeBlocks()[1]).components.map((component: { name: string }) => component.name)).toEqual(['web', 'api'])
+
     fireEvent.click(screen.getByRole('button', { name: 'Next stage' }))
-    expect(chip('Scaling policy')).toHaveTextContent('2–6 replicas · CPU 60%')
-    expect(chip('Scaling policy')).toHaveTextContent('Saved · was 1–3 replicas · CPU 70%')
-    expect(slot(container, 'live')).toHaveTextContent('1–3')
-    expect(path(container, 'drop-scaling-live')).toHaveClass('state-current')
-    expect(path(container, 'drop-scaling-live')).toHaveTextContent('applied live to v17')
+    expect(headings()[1]).toBe('Parsed manifest stored as AppVersion ver_demo.manifest')
+
+    fireEvent.click(chip('version configuration'))
+    expect(screen.getByRole('heading', { name: 'Version configuration', level: 2 })).toBeInTheDocument()
+    expect(JSON.parse(codeBlocks()[0]).versionConfiguration.variables).toEqual([{ name: 'API_URL', value: 'https://api.contoso.com' }])
+    expect(headings()[1]).toBe('Frozen copy in AppVersion ver_demo.configuration')
+
+    fireEvent.click(chip('scaling policy'))
+    expect(JSON.parse(codeBlocks()[0]).scaling.components[0]).toMatchObject({ name: 'api', minReplicas: 1, maxReplicas: 3 })
+
+    fireEvent.click(screen.getByRole('button', { name: /^Inspect AppVersion/ }))
+    expect(JSON.parse(codeBlocks()[0]).manifest.name).toBe('shop')
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect Builder App settings' }))
+    expect(JSON.parse(codeBlocks()[0]).versionConfiguration.variables[0].name).toBe('API_URL')
+    fireEvent.click(screen.getByRole('button', { name: 'Deployment record' }))
+    expect(JSON.parse(codeBlocks()[0])).toMatchObject({ id: 'adp_demo', state: 'not created yet' })
     fireEvent.click(screen.getByRole('button', { name: 'Next stage' }))
-    expect(screen.getByRole('heading', { name: 'v17 now scales 2–6.' })).toBeInTheDocument()
-    expect(slot(container, 'live')).toHaveAttribute('data-slot-state', 'live')
-    expect(slot(container, 'live')).toHaveTextContent('2–6')
-    expect(slot(container, 'live')).toHaveTextContent('api.contoso.com')
-    expect(slot(container, 'live').querySelectorAll('.ov-slot-scale b.is-on')).toHaveLength(2)
-    expect(slot(container, 'new')).toHaveAttribute('data-slot-state', 'none')
-    expect(container.querySelector('.ov-version-card')).toHaveTextContent('v17')
-    expect(container.querySelector('.ov-canvas')).toHaveAttribute('data-route-target', 'live')
+    expect(JSON.parse(codeBlocks()[0])).toMatchObject({ id: 'adp_demo', status: 'building', action: 'deploy' })
+    fireEvent.click(screen.getByRole('button', { name: /^Inspect v1 Artifact App/ }))
+    expect(codeBlocks()[0]).toContain('Microsoft.App/artifactApps')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close component details' }))
+    expect(container.querySelector('.detail-drawer')).not.toBeInTheDocument()
+    expect(screen.getByRole('tabpanel', { name: 'Overview' })).toBeInTheDocument()
   })
 
   it('carries the commit and frozen config into the AppVersion, then image and scaling into the new app', () => {
@@ -202,7 +194,7 @@ describe('Deployment Overview', () => {
     const { container } = render(<App />)
     fireEvent.click(screen.getByRole('button', { name: 'Run flow' }))
     act(() => vi.advanceTimersByTime(200))
-    expect(packets(container)).toEqual(['source-version', 'drop-version'])
+    expect(packets(container)).toEqual(['source-version', 'yaml-version', 'drop-version'])
     fireEvent.click(screen.getByRole('button', { name: 'Pause' }))
     fireEvent.click(screen.getByRole('button', { name: 'Go to stage 5: Start' }))
     fireEvent.click(screen.getByRole('button', { name: 'Run flow' }))
@@ -244,12 +236,12 @@ describe('Deployment Overview', () => {
     expect(screen.getByRole('button', { name: 'Next stage' })).toBeEnabled()
   })
 
-  it.each([{ id: 'manual', title: 'Deployment completed. v1 is live.' }, { id: 'scale', title: 'v17 now scales 2–6.' }])('plays every $id stage and stops automatically', ({ id, title }) => {
+  it.each([{ id: 'manual', title: 'Deployment completed. v1 is live.' }, { id: 'activate', title: 'Activation completed. v16 is live again.' }])('plays every $id stage and stops automatically', ({ id, title }) => {
     vi.useFakeTimers()
     render(<App />)
     selectScenario(id)
     fireEvent.click(screen.getByRole('button', { name: 'Run flow' }))
-    for (let index = 0; index < getOverviewMilestones(getScenario(id as 'manual' | 'scale')).length; index += 1) {
+    for (let index = 0; index < getOverviewMilestones(getScenario(id as 'manual' | 'activate')).length; index += 1) {
       act(() => vi.advanceTimersByTime(2000))
       act(() => vi.advanceTimersByTime(4500))
     }
@@ -293,7 +285,7 @@ describe('Deployment Overview', () => {
     const { unmount } = render(<App />)
     expect(screen.queryByRole('tablist', { name: 'Explorer story' })).not.toBeInTheDocument()
     expect(screen.getByRole('group', { name: 'Deployment map' })).toBeInTheDocument()
-    expect(chip('Version configuration')).toHaveTextContent('API_URL = api.contoso.com')
+    expect(chip('version configuration')).toHaveTextContent('API_URL = api.contoso.com')
     unmount()
     window.history.replaceState(null, '', '#technical/configuration')
     render(<App />)
@@ -457,20 +449,12 @@ describe('Deployment Explorer', () => {
     expect(screen.queryByRole('tab', { name: 'Rollback' })).not.toBeInTheDocument()
   })
 
-  it('shows exact-commit deploy and explicit version activation as distinct actions', () => {
+  it('shows version activation as a distinct no-build action', () => {
     render(<App />)
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Deploy commit' }))
-    expect(screen.getByRole('heading', { name: 'Request deployment of one exact commit' })).toBeInTheDocument()
-    expect(screen.getByText('Find an exact ready AppVersion match')).toBeInTheDocument()
-    const commitScenario = getScenario('commit')
-    const selectionIndex = commitScenario.steps.findIndex((step) => step.id === 'commit-select-version')
-    fireEvent.click(screen.getByRole('button', { name: `Go to step ${selectionIndex + 1}: Find an exact ready AppVersion match` }))
-    expect(screen.getByText(/same lifecycle, source identity, root directory, commit/)).toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole('tab', { name: 'Activate version' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Activate previous version' }))
     expect(screen.getByRole('heading', { name: 'Activate one built AppVersion by ID' })).toBeInTheDocument()
-    expect(screen.getByText('builder app version activate <name> ver_16', { selector: '.scenario-command' })).toBeInTheDocument()
+    expect(screen.getByText('builder app version activate <name> --previous', { selector: '.scenario-command' })).toBeInTheDocument()
     expect(screen.getByText('Activation sequence')).toBeInTheDocument()
     expect(screen.getByText('Validate the selected retained AppVersion')).toBeInTheDocument()
     expect(screen.queryByText('Revalidate the persisted GitHub source authorization')).not.toBeInTheDocument()
@@ -508,7 +492,7 @@ describe('Deployment Explorer', () => {
     fireEvent.click(next)
     expect(screen.getByRole('button', { name: 'Inspect Customer URL' })).toHaveTextContent('Public route verified')
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Deploy latest' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Deploy' }))
     expect(container.querySelector('.traffic-routing')).toHaveAttribute('data-route-target', 'existing')
     expect(container.querySelectorAll('.yarp-backend-route')).toHaveLength(1)
 
@@ -521,32 +505,5 @@ describe('Deployment Explorer', () => {
     fireEvent.click(next)
     expect(container.querySelector('.traffic-routing')).toHaveAttribute('data-route-target', 'candidate')
     expect(container.querySelectorAll('.yarp-backend-route')).toHaveLength(1)
-  })
-
-  it('shows settings updates as Technical flows with no candidate, Deployment, or route move', () => {
-    const { container } = render(<App />)
-    expect(screen.queryByRole('tablist', { name: 'Explorer story' })).not.toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole('tab', { name: 'Change scaling' }))
-    expect(screen.getByRole('heading', { name: 'Send the new scaling policy through ARM' })).toBeInTheDocument()
-    expect(screen.getByText('Settings update sequence')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Inspect No candidate' })).toHaveTextContent('Not needed')
-    expect(screen.getByRole('button', { name: 'Inspect Deployment' })).toHaveTextContent('Not needed')
-    const steps = getScenario('scale').steps
-    fireEvent.click(screen.getByRole('button', { name: `Go to step ${steps.length}: Update the running Artifact App in place` }))
-    expect(screen.getByText(/replaces only the scale block/)).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Next step' }))
-    expect(screen.getByRole('heading', { name: 'Settings update completed' })).toBeInTheDocument()
-    expect(container.querySelector('.traffic-routing')).toHaveAttribute('data-route-target', 'existing')
-    fireEvent.click(screen.getByRole('button', { name: 'Inspect Running Artifact App' }))
-    const running = JSON.parse(container.querySelector('.detail-code code')!.textContent!)
-    expect(running.scale).toMatchObject({ minReplicas: 2, maxReplicas: 6 })
-    expect(running.configuration.env).toEqual([{ name: 'API_URL', secretRef: 'env-0' }])
-    expect(screen.getByText('Settings update completed', { selector: 'dd' })).toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole('tab', { name: 'Change version config' }))
-    expect(screen.getByRole('heading', { name: 'Save a new desired API_URL through ARM' })).toBeInTheDocument()
-    expect(screen.getByText('versionConfiguration: API_URL=legacy.contoso.com')).toBeInTheDocument()
-    expect(screen.getAllByRole('button', { name: /^Go to step/ })).toHaveLength(3)
   })
 })
