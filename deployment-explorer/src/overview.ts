@@ -83,14 +83,14 @@ export function getOverviewMilestones(scenario: Scenario): OverviewMilestone[] {
 
   const builds = scenario.steps.some((step) => step.phase === 'building')
   const operationIndex = scenario.steps.findIndex((step) => step.target === 'deployment')
-  const builtEnd = scenario.steps.findIndex((step) => step.id === 'build-components') + 1
+  const webReadyEnd = scenario.steps.findIndex((step) => step.id === 'publish-static') + 1
   const artifactIndex = scenario.steps.findIndex((step) => step.target === 'artifact')
   const candidateIndex = scenario.steps.findIndex((step) => step.cutoverDuring === 'candidate')
   const nativeReadyEnd = scenario.steps.findIndex((step) => step.cutoverAfter === 'nativeReady') + 1
   const healthyEnd = scenario.steps.findIndex((step) => step.cutoverAfter === 'healthy') + 1
   const routeEnd = scenario.steps.findIndex((step) => step.cutoverAfter === 'switched') + 1
   const releaseEnd = scenario.steps.findIndex((step) => step.phase === 'succeeded') + 1
-  const boundaries = [0, operationIndex, ...(builds ? [builtEnd] : []), artifactIndex, candidateIndex, nativeReadyEnd, healthyEnd, routeEnd, releaseEnd, scenario.steps.length]
+  const boundaries = [0, operationIndex, ...(builds ? [webReadyEnd] : []), artifactIndex, candidateIndex, nativeReadyEnd, healthyEnd, routeEnd, releaseEnd, scenario.steps.length]
   const next = version(scenario.newVersion)!
   const old = version(scenario.oldVersion)
   const host = versionHost(next)
@@ -105,11 +105,11 @@ export function getOverviewMilestones(scenario: Scenario): OverviewMilestone[] {
 
   return withBoundaries(scenario, boundaries, [
     select,
-    ...(builds ? [{ id: 'build' as const, phase: 'build' as const, label: 'Build', title: `Build ${next}.`, description: `A temporary ADC sandbox builds the commit with ${next}'s variables.` }] : []),
+    ...(builds ? [{ id: 'build' as const, phase: 'build' as const, label: 'Build web', title: `Build ${next}'s web files.`, description: `web builds first, in its own temporary ADC sandbox with ${next}'s variables. Its files go to Embr Blob.` }] : []),
     builds
-      ? { id: 'publish', phase: 'build', label: 'Package', title: `Package ${next}'s outputs.`, description: 'The API becomes an OCI image in Embr ACR. Static files go to Embr Blob.' }
+      ? { id: 'publish', phase: 'build', label: 'Build api', title: `Build ${next}'s api image.`, description: 'api builds next, in a fresh sandbox. An ACR Task pushes its image to Embr ACR.' }
       : { id: 'publish', phase: 'build', label: 'Reused', title: `Reuse ${next}'s build.`, description: `${next}'s image is still in Embr ACR and its files in Embr Blob. No build, no push.` },
-    { id: 'artifact', phase: 'provision', label: 'Import', title: 'ADC pulls the image.', description: 'ADC imports it from Embr ACR using Embr\'s pull identity with AcrPull.' },
+    { id: 'artifact', phase: 'provision', label: 'Import', title: 'ADC pulls the image.', description: 'Embr creates an ADC Artifact for the image digest. That is what makes ADC pull it from Embr ACR.' },
     { id: 'candidate', phase: 'provision', label: 'Start', title: old ? `Start ${next} next to ${old}.` : `Start ${next}.`, description: `Variables come from ${next}. Scaling comes from the app.` },
     { id: 'check', phase: 'verify', label: 'Health check', title: `Health-check ${next}.`, description: old ? `Embr probes ${next} directly. Customers stay on ${old}.` : `Embr probes ${next} directly before any traffic.` },
     { id: 'release', phase: 'route', label: 'Switch', title: `Route customers to ${next}.`, description: old ? `Embr YARP moves traffic from ${old} to ${next}.` : `Embr YARP creates the app URL and routes it to ${next}.` },

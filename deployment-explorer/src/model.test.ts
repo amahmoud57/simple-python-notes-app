@@ -130,7 +130,7 @@ describe('deploy versus activate terminology', () => {
     const phases = [...new Set(milestones.map((milestone) => milestone.phase))]
     expect(phases).toEqual(['queue', 'build', 'provision', 'verify', 'route', 'cleanup'])
     const build = milestones.filter((milestone) => milestone.phase === 'build').map((milestone) => milestone.label)
-    expect(build).toEqual(scenario.id === 'manual' || scenario.id === 'latest' ? ['Build', 'Package'] : ['Reused'])
+    expect(build).toEqual(scenario.id === 'manual' || scenario.id === 'latest' ? ['Build web', 'Build api'] : ['Reused'])
     expect(milestones.map((milestone) => milestone.label)).not.toContain('Verify')
   })
 
@@ -207,7 +207,7 @@ describe('deployment overview', () => {
 
   it('distinguishes fresh builds from retained-output reuse and release success from cleanup', () => {
     for (const id of ['manual', 'latest'] as const) {
-      expect(getOverviewMilestones(getScenario(id)).find((milestone) => milestone.id === 'publish')?.label).toBe('Package')
+      expect(getOverviewMilestones(getScenario(id)).find((milestone) => milestone.id === 'publish')?.label).toBe('Build api')
       expect(getOverviewMilestones(getScenario(id)).some((milestone) => milestone.id === 'build')).toBe(true)
     }
     for (const id of ['commit', 'redeploy', 'activate'] as const) {
@@ -296,19 +296,66 @@ describe('deployment model', () => {
   it('explains the AppVersion ready gate as concrete build and runtime settings', () => {
     const readyStep = getScenario('manual').steps.find((step) => step.id === 'finish-version-build')
 
-    expect(readyStep?.title).toContain('build recipe and output')
+    expect(readyStep?.title).toBe('Mark the AppVersion ready')
     expect(readyStep?.reason).toContain('platform, commands, output directory, role, port, and health path')
     expect(readyStep?.reason).toContain('at least one immutable output')
+    expect(readyStep?.result).toContain('Deployment adp_demo: provisioning')
   })
 
   it('defines AppVersion building as immutable output production, not runtime deployment', () => {
     const buildStep = getScenario('manual').steps.find((step) => step.id === 'start-version-build')
 
-    expect(buildStep?.title).toBe('Begin producing deployable outputs')
+    expect(buildStep?.title).toBe('Start the AppVersion build')
     expect(buildStep?.reason).toContain('versioned Blob assets for static components')
-    expect(buildStep?.reason).toContain('digest-pinned OCI image for compute')
+    expect(buildStep?.reason).toContain('digest-pinned OCI image for runtime components')
     expect(buildStep?.reason).toContain('does not create runtime resources or move traffic')
     expect(buildStep?.result).toContain('runtime remains unchanged')
+  })
+
+  it('builds and publishes one component at a time, each in its own sandbox, as main does', () => {
+    const scenario = getScenario('manual')
+    const ids = scenario.steps.map((step) => step.id)
+    const order = ['create-deployment', 'start-version-build', 'checkout-source', 'build-web', 'publish-static', 'build-api', 'publish-image', 'finish-version-build', 'import-artifact']
+    expect(order.map((id) => ids.indexOf(id))).toEqual([...order.map((id) => ids.indexOf(id))].sort((a, b) => a - b))
+    expect(order.every((id) => ids.includes(id))).toBe(true)
+
+    const components = (id: string) => JSON.parse(getNodeExample('version', scenario, countAfter(scenario, id), 'empty').body).build.components
+      .map((component: { name: string, status: string }) => `${component.name}:${component.status}`)
+    expect(components('start-version-build')).toEqual(['web:building', 'api:pending'])
+    expect(components('build-web')).toEqual(['web:building', 'api:pending'])
+    expect(components('publish-static')).toEqual(['web:ready', 'api:building'])
+    expect(components('publish-image')).toEqual(['web:ready', 'api:ready'])
+  })
+
+  it('populates the Deployment as the rollout advances and returns 202 only after it exists', () => {
+    const scenario = getScenario('latest')
+    const deployment = (id: string) => {
+      const count = countAfter(scenario, id)
+      return JSON.parse(getNodeExample('deployment', scenario, count, getCutoverState(scenario, count)).body)
+    }
+
+    expect(scenario.steps[0].result).toContain('once Regional has created the Deployment')
+    expect(scenario.steps.find((step) => step.id === 'create-deployment')?.result).toContain('ARM returns 202')
+    expect(deployment('create-deployment')).toMatchObject({ status: 'building', executionEpoch: 0 })
+    expect(deployment('create-deployment').outputs).toBeUndefined()
+    expect(deployment('start-version-build').executionEpoch).toBe(1)
+    expect(deployment('finish-version-build')).toMatchObject({ status: 'provisioning', outputs: [{ componentName: 'web', outputId: 'static' }, { componentName: 'api', outputId: 'server', kind: 'compute' }] })
+    expect(deployment('import-artifact').candidateArtifactAppResourceId).toContain('/artifactApps/')
+    expect(deployment('import-artifact').candidateFqdn).toBeUndefined()
+    expect(deployment('create-candidate')).toMatchObject({ status: 'healthChecking', candidateFqdn: expect.any(String) })
+    expect(deployment('direct-health').status).toBe('activating')
+    expect(deployment('direct-health').publicUrl).toBeUndefined()
+    expect(deployment('activate-route')).toMatchObject({ publicUrl: expect.stringMatching(/^https:/), activatedAt: expect.any(String) })
+    expect(deployment('promote-runtime')).toMatchObject({ status: 'succeeded', completedAt: expect.any(String), postDeploymentCleanupStatus: 'pending' })
+  })
+
+  it('makes ADC pull from ACR only when Embr creates the Artifact', () => {
+    const importStep = getScenario('manual').steps.find((step) => step.id === 'import-artifact')
+
+    expect(importStep?.reason).toContain('ADC never watches ACR')
+    expect(importStep?.reason).toContain('That PUT is what makes ADC pull from Embr ACR')
+    expect(importStep?.api).toContain('kind: registry, imageUrl, auth: { identity }')
+    expect(getScenario('manual').steps.find((step) => step.id === 'create-candidate')?.reason).toContain('the ADC Artifact Version, not an image in ACR')
   })
 
   it('tracks native readiness, direct health, route switch, and background cleanup', () => {
@@ -430,7 +477,7 @@ describe('deployment model', () => {
 
     const ready = getNodeExample('version', scenario, readyIndex + 1, 'empty').body
     expect(ready).toContain('"status": "ready"')
-    expect(ready).toContain('static-assets/app_shop/ver_demo/web/site')
+    expect(ready).toContain('static-assets/app_shop/ver_demo/web/static')
     expect(ready).toContain('@sha256:71ab42d9c508')
   })
 

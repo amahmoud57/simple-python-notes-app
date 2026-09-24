@@ -76,9 +76,10 @@ not live telemetry or controls that mutate the stamp.
 
 ### Verification Results
 
-- 97 Vitest tests pass, covering commands and Deployment actions, the shared CLI timeline,
-  both configuration lifecycles, the `builder.yaml` contract, every deploy journey, settings
-  scenarios in both views, playback, and Technical map fit.
+- 100 Vitest tests pass, covering commands and Deployment actions, the shared CLI timeline,
+  both configuration lifecycles, the `builder.yaml` contract, per-component build order, Deployment
+  document timing, every deploy journey, settings scenarios in both views, playback, and
+  Technical map fit.
 - TypeScript/Vite production build and Oxlint pass.
 - Playwright verified all seven scenarios, health-before-traffic ordering, release
   success before cleanup, view switching, keyboard stage navigation, and pause.
@@ -215,5 +216,44 @@ Inspected Embr main at `e1676dea9f54aae74ad24d8dbe562e86cc8ed218`:
   Generic Oryx compute needs `role: web` or `run` plus a supported platform, rejects `output`,
   and defaults `run.port` to 8080.
 - `BuilderAppVersion.manifest` is the parsed `AppManifest`.
+
+</details>
+
+## Build Order and Documents
+
+The AppVersion and the Deployment both exist before ARM returns 202. Everything after that runs in a
+background worker, and each document fills in as the rollout advances:
+
+1. Admission: reserve the app, resolve the commit, and read `builder.yaml`. Then create the pending
+   AppVersion (source, manifest, frozen config, one pending entry per component) and the Building
+   Deployment (AppVersion ID, action, config copy, previous provider). ARM returns 202.
+2. Build: a worker claims the Deployment and the app build lease, and marks the AppVersion building.
+   Components build one at a time in manifest order. Each gets its own temporary sandbox, checkout,
+   build, and publish, then records its build settings and outputs and becomes ready: web to Blob,
+   then api to ACR through an ACR Task. The AppVersion becomes ready when every component is.
+3. Provision: the Deployment records its outputs and the candidate it will create. Embr then PUTs an
+   ADC Artifact with the digest-pinned image and the AcrPull identity. That PUT is what makes ADC pull
+   from Embr ACR; ADC never watches the registry. The Artifact App runs that Artifact Version.
+4. Verify and route: the Deployment records the candidate FQDN (`healthChecking`), then `activating`
+   after the direct health check, then the public URL when YARP switches, and finally `succeeded`.
+
+Overview shows this as two Build stages, web then api. Technical shows each step.
+
+<details>
+<summary>Build and runtime provenance</summary>
+
+Inspected Embr main at `e1676dea9f54aae74ad24d8dbe562e86cc8ed218`:
+
+- `AppDeploymentService.TriggerInternalAsync` admits the app, calls
+  `AppVersionService.CreatePendingFromReferenceAsync`, creates the Deployment, and signals the
+  worker. `BuilderAppController.Deploy` returns 202 with the Deployment ID only after that call.
+- `DriveOwnedAsync` claims execution, then `EnsureVersionReadyAsync` acquires the build lease and
+  runs `AppVersionBuildExecutionService.DriveAsync`, which builds components sequentially.
+- `ComponentBuildOrchestrator.ExecuteAsync` provisions a sandbox per component, checks out source,
+  runs Oryx, publishes outputs, and deletes the sandbox. `AcrComputeImagePublisher` uploads the
+  build context and calls ACR `scheduleRun`.
+- `ArtifactAppRuntimeProvider.EnsureDeploymentArtifactAsync` PUTs `Microsoft.App/artifacts` with
+  `source.kind: registry`, `imageUrl`, and the registry pull identity, then waits for the Artifact
+  Version. `BuildAppBody` references it through `artifactVersionUrl`.
 
 </details>

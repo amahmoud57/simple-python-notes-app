@@ -20,8 +20,9 @@ what they start from, and the command bar shows the command each one runs:
 | Change settings | Change scaling | `builder app scale <name> --component api ...` | No Deployment |
 
 Every Deployment follows the Builder CLI timeline: Queue, Build, Provision, Verify, Route, and
-Cleanup. The stage stepper groups stages under those phases. Deploy fills Build with the build and
-package stages; activation and redeploy mark Build as reused, and completion reads "Deployment
+Cleanup. The stage stepper groups stages under those phases. Deploy fills Build with one stage per
+component, web then api, because Embr builds and publishes them one at a time; activation and
+redeploy mark Build as reused, and completion reads "Deployment
 completed", "Activation completed", or "Redeploy completed". The API's `activating` status is the
 Route phase of every Deployment, so the demo labels it Routing, not activation.
 
@@ -33,10 +34,11 @@ Configuration is drawn where it enters the flow:
 - **Scaling** drops straight into the Artifact App. Every deploy, redeploy, and activation uses
   the current policy, and changing it updates the running app in place.
 
-The flow shows the ADC build sandbox, OCI publishing to Embr ACR, the AcrPull import into an ADC
-Artifact, the new Artifact App beside the live one, the health check, the YARP switch, public
-verification, and cleanup. Static files go through Embr Blob. Retained versions skip the build;
-activation brings back that version's own `API_URL` while keeping the current scaling.
+The flow shows a temporary ADC build sandbox per component, the api image pushed to Embr ACR, the
+ADC Artifact whose creation makes ADC pull that image, the new Artifact App beside the live one, the
+health check, the YARP switch, public verification, and cleanup. Static files go through Embr Blob.
+Retained versions skip the build; activation brings back that version's own `API_URL` while keeping
+the current scaling.
 
 Playback moves payloads along the active handoffs with one short caption. The stage stepper and
 previous/next controls share progress with Technical.

@@ -245,15 +245,15 @@ function NodeButton({
     || [...completedIds].some((item) => item.endsWith('-promote'))
   const deploymentStatus = deploymentSucceeded
     ? { text: 'Succeeded', tone: 'serving' }
-    : ['switched', 'verified', 'active'].includes(cutover)
-        ? { text: 'Routing', tone: 'existing' }
+    : ['healthy', 'switched', 'verified', 'active'].includes(cutover)
+      ? { text: 'Routing', tone: 'existing' }
+      : cutover === 'nativeReady'
+        ? { text: 'Health check', tone: 'ready' }
         : activationPending
           ? { text: 'Pending', tone: 'pending' }
-        : versionReady
-          ? { text: 'Provisioning', tone: 'ready' }
-          : versionBuilding
-            ? { text: 'Building', tone: 'building' }
-            : { text: 'Pending', tone: 'pending' }
+          : versionReady
+            ? { text: 'Provisioning', tone: 'ready' }
+            : { text: 'Building', tone: 'building' }
   const lifecycleStatus = id === 'app'
     ? { text: 'Exists before deploy', tone: 'existing' }
     : id === 'version'

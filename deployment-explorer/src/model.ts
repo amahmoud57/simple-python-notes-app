@@ -178,8 +178,8 @@ const createDeploymentStep = (deploymentId: string, appVersionId: string): FlowS
   target: 'deployment',
   payload: `${appVersionId} + frozen AppVersion configuration + previous provider`,
   payloadKind: 'resource',
-  reason: 'The AppVersion now exists. Regional copies its immutable version configuration and records the previous provider in a durable Building Deployment with action deploy.',
-  result: `Deployment ${deploymentId}: building; action: deploy; appVersionId: ${appVersionId}; execution signaled`,
+  reason: 'The AppVersion now exists. Regional copies its immutable version configuration and records the previous provider in a durable Building Deployment with action deploy. Only now does the ARM request return 202.',
+  result: `Deployment ${deploymentId}: building; action: deploy; appVersionId: ${appVersionId}; ARM returns 202; worker signaled`,
   api: 'IBuilderAppDeploymentRepository.CreateAsync(deployment with { AppVersionId = versionId })',
 })
 
@@ -236,89 +236,101 @@ const sourceBuildSteps = (
   step({
     id: 'start-version-build',
     phase: 'building',
-    title: 'Begin producing deployable outputs',
+    title: 'Start the AppVersion build',
     source: 'deployment',
     target: 'version',
-    payload: 'exact source + builder.yaml component plan',
+    payload: 'build lease + component order: web, then api',
     payloadKind: 'build',
-    reason: 'Building an AppVersion turns its pinned source into immutable outputs for every component: versioned Blob assets for static components and a digest-pinned OCI image for compute. It does not create runtime resources or move traffic.',
-    result: `Operation ${deploymentId}: building; AppVersion ${appVersionId}: building; runtime remains unchanged`,
-    api: 'Status = AppDeploymentStatus.Building -> EnsureVersionReadyAsync -> TryAcquireAsync',
+    reason: 'Everything after the 202 runs in a background worker. It claims the Deployment, takes the app build lease, and marks the AppVersion building. Components then build one at a time in manifest order, each into immutable outputs: versioned Blob assets for static components and a digest-pinned OCI image for runtime components. Building does not create runtime resources or move traffic.',
+    result: `AppVersion ${appVersionId}: building (web first, api pending); Deployment ${deploymentId} stays building; runtime remains unchanged`,
+    api: 'TryClaimExecutionAsync -> EnsureVersionReadyAsync -> TryAcquireAsync -> ClaimBuildAsync',
   }),
   step({
     id: 'checkout-source',
     phase: 'building',
-    title: 'Check out the exact revision',
+    title: 'Create web\'s build sandbox and check out the commit',
     source: 'github',
     target: 'build',
     payload: 'source @ 9f42c1e',
     payloadKind: 'revision',
-    reason: 'The temporary ADC sandbox checks out the exact commit recorded on the AppVersion, so every component sees the same source tree.',
-    result: 'Commit 9f42c1e checked out at /app in the build sandbox',
+    reason: 'Each component gets its own temporary ADC sandbox, started with the AppVersion\'s frozen variables. web\'s sandbox checks out the exact commit recorded on the AppVersion.',
+    result: 'web sandbox ready; commit 9f42c1e checked out at /app',
     api: 'Sandboxes.ExecuteShellCommandAsync: git fetch --depth 1 $EMBR_CLONE_URL $EMBR_REVISION',
     executionSurface: 'command',
   }),
   step({
-    id: 'build-components',
+    id: 'build-web',
     phase: 'building',
-    title: 'Run each component build',
+    title: 'Build web with Vite',
     source: 'version',
     target: 'build',
-    payload: 'component build plan',
+    payload: 'web: nodejs 22 · npm run build · dist',
     payloadKind: 'build',
-    reason: 'Embr runs the selected build recipe for each component, such as a Vite static build or Python compute build, and captures what it produced.',
-    result: 'Web build produced static files; API build produced a runnable Python output',
-    api: 'ComponentBuildOrchestrator.ExecuteAsync -> ExecuteOryxBuildAsync -> DiscoverOutputsAsync',
+    reason: 'Embr finds Vite in frontend/ and runs npm run build through Oryx in web\'s sandbox, then collects the files in dist/.',
+    result: 'web build produced dist/ with 146 files',
+    api: 'ComponentBuildOrchestrator.ExecuteAsync(web) -> ExecuteOryxBuildAsync -> DiscoverOutputsAsync',
   }),
   step({
     id: 'publish-static',
     phase: 'building',
-    title: 'Publish immutable static assets',
+    title: 'Publish web\'s files and mark web ready',
     source: 'build',
     target: 'blob',
     payload: '146 files + route manifest',
     payloadKind: 'static',
-    reason: 'The web component files are uploaded under an immutable versioned Blob prefix that YARP can serve directly.',
-    result: `Static output recorded at static-assets/app_shop/${appVersionId}/web/site`,
+    reason: 'web\'s files are uploaded under an immutable versioned Blob prefix that YARP can serve directly. The sandbox is deleted, and the AppVersion records how web was built and where its output lives.',
+    result: `web: ready; static output at static-assets/app_shop/${appVersionId}/web/static`,
     api: 'azcopy copy /tmp/embr-static/* $EMBR_STATIC_SAS_URL --recursive --put-md5',
     executionSurface: 'command',
   }),
   step({
+    id: 'build-api',
+    phase: 'building',
+    title: 'Build api in a fresh sandbox',
+    source: 'github',
+    target: 'build',
+    payload: 'source @ 9f42c1e + api: python 3.12',
+    payloadKind: 'build',
+    reason: 'api starts only after web is ready. It gets its own temporary sandbox with the same frozen variables, checks out the same commit, and Oryx builds the Python app.',
+    result: 'api build produced a runnable Python output',
+    api: 'ComponentBuildOrchestrator.ExecuteAsync(api) -> CheckoutAsync -> ExecuteOryxBuildAsync',
+  }),
+  step({
     id: 'publish-image',
     phase: 'building',
-    title: 'Publish the compute image',
+    title: 'Push api\'s image to ACR and mark api ready',
     source: 'build',
     target: 'acr',
     payload: 'OCI build context',
     payloadKind: 'image',
-    reason: 'The API component output and entrypoint are packaged as an OCI image and pushed to ACR by digest.',
-    result: 'Compute output recorded as api@sha256:71ab42d9c508...',
+    reason: 'Embr packages api\'s output into a build context, uploads it, and runs an ACR Task that builds and pushes the OCI image. The sandbox is deleted, and the AppVersion records api\'s build settings and digest-pinned image.',
+    result: 'api: ready; compute output api@sha256:71ab42d9c508...',
     api: 'POST {registryResourceId}/scheduleRun?api-version=2019-04-01',
     executionSurface: 'armApi',
   }),
   step({
     id: 'finish-version-build',
     phase: 'building',
-    title: 'Confirm every component has a build recipe and output',
+    title: 'Mark the AppVersion ready',
     source: 'build',
     target: 'version',
     payload: 'recorded build settings + immutable output references',
     payloadKind: 'resource',
-    reason: 'For every component, Embr has recorded how to build and run it: platform, commands, output directory, role, port, and health path. Each component must also have at least one immutable output.',
-    result: `AppVersion ${appVersionId}: ready; the Deployment may now provision runtime resources`,
-    api: 'AppVersionBuildExecutionService.CompleteReadyAsync -> build.status = ready',
+    reason: 'Every component now has recorded build settings (platform, commands, output directory, role, port, and health path) and at least one immutable output, so the AppVersion becomes ready and the build lease is released. Only then does the Deployment move on to provisioning.',
+    result: `AppVersion ${appVersionId}: ready; Deployment ${deploymentId}: provisioning with both outputs recorded`,
+    api: 'CompleteReadyAsync -> build.status = ready; Deployment { Status = Provisioning, Outputs }',
   }),
   step({
     id: 'import-artifact',
     phase: 'provisioning',
-    title: 'Import the OCI image as an ADC Artifact',
+    title: 'Create the ADC Artifact so ADC pulls the image',
     source: 'acr',
     target: 'artifact',
-    payload: 'digest-pinned image',
+    payload: 'digest-pinned image URL + ACR pull identity',
     payloadKind: 'image',
-    reason: 'The Deployment reads the ready AppVersion compute digest and imports that image into ADC for runtime provisioning.',
-    result: 'ADC Artifact Version created from the recorded OCI digest: ready',
-    api: 'PUT .../providers/Microsoft.App/artifacts/embr-{deploymentHash}',
+    reason: 'ADC never watches ACR. The Deployment records the candidate it will create, then Embr PUTs an ADC Artifact whose source is the api image by digest plus a user-assigned identity with AcrPull. That PUT is what makes ADC pull from Embr ACR; Embr waits until the Artifact Version is Ready.',
+    result: 'ADC Artifact Version ready: image pulled from Embr ACR by digest',
+    api: 'PUT .../providers/Microsoft.App/artifacts/embr-{deploymentHash} { source: { kind: registry, imageUrl, auth: { identity } } }',
     executionSurface: 'armApi',
   }),
   step({
@@ -330,8 +342,8 @@ const sourceBuildSteps = (
     payload: 'Artifact Version + frozen AppVersion variables + current app scaling + HTTP Readiness probe',
     payloadKind: 'resource',
     reason: hasExistingRuntime
-      ? 'The active provider is never replaced in place. Embr creates an isolated candidate from the AppVersion image and frozen variables, applies the app current scaling policy, adds an ADC HTTP Readiness probe, then waits for every configured replica and app container to report Running, Started, and Ready.'
-      : 'Embr creates the first provider from the AppVersion image and frozen variables, applies the app current scaling policy, adds an ADC HTTP Readiness probe, then waits for every configured replica and app container to report Running, Started, and Ready.',
+      ? 'The active provider is never replaced in place. Embr creates an isolated candidate that runs the ADC Artifact Version, not an image in ACR, with the frozen variables, applies the app current scaling policy, adds an ADC HTTP Readiness probe, then waits for every configured replica and app container to report Running, Started, and Ready.'
+      : 'Embr creates the first provider to run the ADC Artifact Version, not an image in ACR, with the frozen variables, applies the app current scaling policy, adds an ADC HTTP Readiness probe, then waits for every configured replica and app container to report Running, Started, and Ready.',
     result: 'ADC native readiness passed; candidate remains outside YARP traffic',
     api: 'ArtifactAppRuntimeProvider.CreateCandidateAsync -> WaitForReplicaReadinessAsync',
     executionSurface: 'armApi',
@@ -462,7 +474,7 @@ const manualSteps: FlowStep[] = [
     payload: 'POST /deploy + request ID',
     payloadKind: 'request',
     reason: 'The customer explicitly asks Builder Apps to deploy its configured source.',
-    result: '202 Accepted + Azure-AsyncOperation URL',
+    result: '202 Accepted + Azure-AsyncOperation URL, once Regional has created the Deployment',
     api: 'POST .../Microsoft.Web/builderApps/shop/deploy?api-version=2026-08-01-preview',
     executionSurface: 'armApi',
   }),
@@ -516,7 +528,7 @@ const latestRevisionSteps: FlowStep[] = [
     payload: 'POST /deploy + request ID',
     payloadKind: 'request',
     reason: 'This is a source deployment, not a configuration change. The customer asks Builder Apps to resolve and build the current head of its configured branch, then replace the active version.',
-    result: '202 Accepted + Azure-AsyncOperation URL',
+    result: '202 Accepted + Azure-AsyncOperation URL, once Regional has created the Deployment',
     api: 'POST .../Microsoft.Web/builderApps/shop/deploy?api-version=2026-08-01-preview',
     executionSurface: 'armApi',
   }),
@@ -576,7 +588,7 @@ const retainedRuntimeSteps = (
     target: 'artifact',
     payload: `${appVersionId} retained OCI digest`,
     payloadKind: 'image',
-    reason: 'The new Deployment imports the selected immutable image under its own deterministic runtime resource ID.',
+    reason: 'The new Deployment PUTs its own ADC Artifact for the retained image digest. That PUT makes ADC pull the image from Embr ACR with the pull identity; Embr waits for the Artifact Version to be Ready.',
     result: 'deployment-owned ADC Artifact Version: ready',
     api: 'PUT .../providers/Microsoft.App/artifacts/embr-{deploymentHash}',
     executionSurface: 'armApi',
@@ -677,7 +689,7 @@ const commitSteps: FlowStep[] = [
     payload: 'POST /deploy { commitSha: 71ab42d... }',
     payloadKind: 'request',
     reason: 'The customer pins a full 40-character Git commit while keeping the app current desired version configuration.',
-    result: '202 Accepted + Azure-AsyncOperation URL',
+    result: '202 Accepted + Azure-AsyncOperation URL, once Regional has created the Deployment',
     api: 'builder app deploy shop --commit 71ab42d9c508... --request-id commit-842',
     executionSurface: 'armApi',
   }),
@@ -739,7 +751,7 @@ const commitSteps: FlowStep[] = [
     payload: 'ver_commit_71ab + SourceRevision + frozen configuration',
     payloadKind: 'resource',
     reason: 'Because a retained exact match was selected, the Deployment action remains deploy but starts Provisioning instead of Building.',
-    result: 'Deployment adp_commit: provisioning; action: deploy; sourceRevision: 71ab42d...',
+    result: 'Deployment adp_commit: provisioning; action: deploy; sourceRevision: 71ab42d...; ARM returns 202',
     api: 'IBuilderAppDeploymentRepository.CreateAsync(status = Provisioning, action = Deploy)',
   }),
   ...retainedRuntimeSteps('commit', 'adp_commit', 'ver_commit_71ab', 'v18'),
@@ -755,7 +767,7 @@ const redeploySteps: FlowStep[] = [
       payload: 'POST /redeploy',
       payloadKind: 'request',
       reason: 'An ARM-only action with no Builder CLI command. It asks for fresh runtime resources for the active version without resolving GitHub or rebuilding source.',
-      result: '202 Accepted + Azure-AsyncOperation URL',
+      result: '202 Accepted + Azure-AsyncOperation URL, once Regional has created the Deployment',
       api: 'POST .../Microsoft.Web/builderApps/shop/redeploy',
       executionSurface: 'armApi',
     }),
@@ -805,7 +817,7 @@ const redeploySteps: FlowStep[] = [
       payload: 'ver_17 + its frozen AppVersion configuration',
       payloadKind: 'resource',
       reason: 'The retained AppVersion already exists and is ready. The Deployment copies that version frozen configuration, not the app current desired configuration, and skips source and build.',
-      result: 'Deployment adp_redeploy: provisioning; action: redeploy; appVersionId: ver_17',
+      result: 'Deployment adp_redeploy: provisioning; action: redeploy; appVersionId: ver_17; ARM returns 202',
       api: 'IBuilderAppDeploymentRepository.CreateAsync(deployment with { AppVersionId = retainedVersionId })',
     }),
     step({
@@ -917,7 +929,7 @@ const activateSteps: FlowStep[] = [
     payload: 'POST /versions/ver_16/activate',
     payloadKind: 'request',
     reason: 'The customer names an exact retained AppVersion. `builder app version activate --previous` resolves the latest successful different version first and calls the same action. Activation never resolves source or builds.',
-    result: '202 Accepted + Azure-AsyncOperation URL',
+    result: '202 Accepted + Azure-AsyncOperation URL, once Regional has created the Deployment',
     api: 'builder app version activate shop ver_16 --request-id activate-842',
     executionSurface: 'armApi',
   }),
@@ -967,7 +979,7 @@ const activateSteps: FlowStep[] = [
     payload: 'ver_16 + frozen AppVersion configuration',
     payloadKind: 'resource',
     reason: 'Activation still creates a Deployment, the same rollout record deploy uses. Its action is activate and its configuration is copied from the selected AppVersion, not from current desired app settings.',
-    result: 'Deployment adp_activate: pending; action: activate; appVersionId: ver_16',
+    result: 'Deployment adp_activate: pending; action: activate; appVersionId: ver_16; ARM returns 202',
     api: 'IBuilderAppDeploymentRepository.CreateAsync(status = Pending, action = Activate)',
   }),
   step({
@@ -1345,19 +1357,18 @@ export function getNodeExample(
     && !completedIds.has('activate-prepare')
   const deploymentStatus = promoted
     ? 'succeeded'
-    : switched
+    : candidateHealthy
       ? 'activating'
-      : activationPending
-        ? 'pending'
-      : candidateCreated
-        ? 'provisioning'
-        : versionReady
-          ? 'provisioning'
-          : versionBuilding
-            ? 'building'
-            : deploymentCreated
-              ? retainedVersion ? 'provisioning' : 'building'
-              : 'pending'
+      : candidateNativeReady
+        ? 'healthChecking'
+        : activationPending
+          ? 'pending'
+          : versionReady || candidateCreated
+            ? 'provisioning'
+            : deploymentCreated ? 'building' : 'pending'
+  const workerClaimed = deploymentCreated && (retainedVersion || completedIds.has('start-version-build'))
+  const candidateRecorded = candidateCreated || [...completedIds].some((item) => item.endsWith('-artifact'))
+  const deploymentTime = (time: string) => `${retainedVersion ? '2026-09-22' : '2026-09-16'}T${time}Z`
   const deploymentAction = scenario.id === 'redeploy'
     ? 'redeploy'
     : scenario.id === 'activate'
@@ -1383,7 +1394,7 @@ export function getNodeExample(
   const image = `embr.azurecr.io/builder/app_shop/api@sha256:71ab42d9c508...`
   const candidateName = `embr-${deploymentId.replace('adp_', '')}-7c2f`
   const candidateFqdn = `${candidateName}.westus3.azurecontainerapps.io`
-  const staticReference = `static-assets/app_shop/${versionId}/web/site`
+  const staticReference = `static-assets/app_shop/${versionId}/web/static`
 
   switch (id) {
     case 'client':
@@ -1454,7 +1465,7 @@ export function getNodeExample(
     case 'deployment':
       if (settingsUpdate) return { title: 'No Deployment for a settings update', format: 'JSON', body: json({ created: false, reason: scenario.kind === 'config' ? 'Desired versionConfiguration waits for the next deploy to snapshot it into a new AppVersion.' : 'Scaling is applied to the active Artifact App directly; the active Deployment stays the same.', activeDeploymentId: 'adp_previous' }) }
       if (!deploymentCreated) return { title: 'Deployment before creation', format: 'JSON', body: json({ id: deploymentId, state: 'not created yet', waitingFor: 'validated Builder App configuration and trigger metadata' }) }
-      return { title: 'BuilderAppDeployment operation document', format: 'JSON', body: json({ id: deploymentId, appId: 'app_shop', appVersionId: versionId, status: deploymentStatus, action: deploymentAction, sourceRevision, configuration: frozenConfiguration, executionEpoch: deploymentCreated ? 4 : 0, candidateFqdn: candidateCreated ? candidateFqdn : undefined, publicUrl: switched ? demoCustomerUrl : undefined, previousDeploymentId: scenario.hasExistingRuntime ? 'adp_previous' : undefined, postDeploymentCleanupStatus: promoted ? cleanupCompleted ? 'completed' : 'pending' : undefined, completedAt: promoted ? '2026-09-22T18:42:31Z' : undefined }) }
+      return { title: 'BuilderAppDeployment operation document', format: 'JSON', body: json({ id: deploymentId, appId: 'app_shop', appVersionId: versionId, status: deploymentStatus, action: deploymentAction, sourceRevision, configuration: frozenConfiguration, executionEpoch: workerClaimed ? 1 : 0, candidateArtifactAppResourceId: candidateRecorded ? `/subscriptions/runtime-sub/resourceGroups/runtime-rg/providers/Microsoft.App/artifactApps/${candidateName}` : undefined, candidateFqdn: candidateNativeReady ? candidateFqdn : undefined, previousDeploymentId: scenario.hasExistingRuntime ? 'adp_previous' : undefined, outputs: versionReady ? [{ componentName: 'web', outputId: 'static', kind: 'static', reference: staticReference }, { componentName: 'api', outputId: 'server', kind: 'compute', reference: image }] : undefined, publicUrl: switched ? demoCustomerUrl : undefined, postDeploymentCleanupStatus: promoted ? cleanupCompleted ? 'completed' : 'pending' : undefined, createdAt: deploymentTime('18:37:59'), startedAt: deploymentTime('18:37:59'), activatedAt: switched ? deploymentTime('18:43:40') : undefined, completedAt: promoted ? deploymentTime('18:44:05') : undefined }) }
     case 'app':
       return { title: 'Regional BuilderApp persistence document', format: 'JSON', body: json({ id: 'app_shop', name: 'deployment-explorer-demo', subscriptionId: '64fc8655-6859-4b06-96d2-df698d5808cc', resourceGroup: 'rg-builder-cli-demo-amahmoud11', location: 'westus2', provisioningState: 'Succeeded', lifecycleId: 'ali_31', source: { provider: 'github', id: '1211637325', displayName: 'amahmoud57/simple-python-notes-app', reference: 'demo/builder-deployment-explorer', authorization: { provider: 'github', providerSubjectId: 'github-user-842', armTenantId: '72f988bf-86f1-41af-91ab-2d7cd011db47', armObjectId: '093b6f15-6e26-4906-b372-10c4fe0c3eb0', authorizedAt: '2026-09-22T18:30:00Z' } }, versionConfiguration: configurationDocument(settings.desiredHost), scaling: scalingDocument(settings.scaling), automation: { autoDeploy: false }, routeAuthRevision: 12, routeAuthAppliedRevision: switched || settingsUpdate ? 12 : 11, pendingDeploymentId: cleanupInProgress || appReserved && !promoted ? deploymentId : null, pendingDeploymentCleanupEpoch: cleanupInProgress ? 4 : undefined, runtime: promoted ? { activeDeploymentId: deploymentId, activeAppVersionId: versionId, versionConfiguration: frozenConfiguration, url: demoCustomerUrl } : scenario.hasExistingRuntime ? { activeDeploymentId: 'adp_previous', activeAppVersionId: previousVersionId, versionConfiguration: previousConfiguration, url: demoCustomerUrl } : null }) }
     case 'github':
@@ -1481,17 +1492,19 @@ export function getNodeExample(
                 stepId: 'build:web',
                 name: 'web',
                 status: staticPublished ? 'ready' : versionBuilding ? 'building' : 'pending',
-                outputs: staticPublished ? [{ id: 'site', kind: 'static', reference: staticReference }] : [],
+                outputs: staticPublished ? [{ id: 'static', kind: 'static', reference: staticReference }] : [],
               },
               {
                 stepId: 'build:api',
                 name: 'api',
                 status: imagePublished ? 'ready' : staticPublished ? 'building' : 'pending',
-                outputs: imagePublished ? [{ id: 'runtime', kind: 'compute', reference: image }] : [],
+                outputs: imagePublished ? [{ id: 'server', kind: 'compute', reference: image }] : [],
               },
             ],
+            startedAt: versionBuilding ? '2026-09-16T18:38:02Z' : undefined,
             completedAt: versionReady ? '2026-09-16T18:41:52Z' : undefined,
           },
+          createdAt: '2026-09-16T18:37:58Z',
         }),
       }
     case 'build':
