@@ -55,16 +55,16 @@ export function getOverviewMilestones(scenario: Scenario): OverviewMilestone[] {
   const healthyEnd = scenario.steps.findIndex((step) => step.cutoverAfter === 'healthy') + 1
   const routeEnd = scenario.steps.findIndex((step) => step.cutoverAfter === 'switched') + 1
   const releaseEnd = scenario.steps.findIndex((step) => step.phase === 'succeeded') + 1
-  const boundaries = [0, operationIndex, ...(builds ? [webReadyEnd] : []), artifactIndex, candidateIndex, nativeReadyEnd, healthyEnd, routeEnd, releaseEnd, scenario.steps.length]
+  const boundaries = [0, operationIndex + 1, ...(builds ? [webReadyEnd] : []), artifactIndex, candidateIndex, nativeReadyEnd, healthyEnd, routeEnd, releaseEnd, scenario.steps.length]
   const next = version(scenario.newVersion)!
   const old = version(scenario.oldVersion)
   const host = versionHost(next)
 
   const select: MilestoneCopy = scenario.id === 'redeploy'
-    ? { id: 'select', phase: 'queue', label: `Pick ${next}`, title: `Redeploy starts from the active version, ${next}.`, description: 'No source and no build. Same code and config on a fresh Artifact App.' }
+    ? { id: 'select', phase: 'queue', label: `Pick ${next}`, title: `Redeploy starts from the active version, ${next}.`, description: 'No source and no build. A new Deployment puts the same code and config on a fresh Artifact App.' }
     : scenario.id === 'activate'
-      ? { id: 'select', phase: 'queue', label: `Pick ${next}`, title: `Activate starts from a built version, ${next}.`, description: `No source and no build. ${next} brings its own frozen API_URL=${host}.` }
-      : { id: 'select', phase: 'queue', label: `Create ${next}`, title: `Deploy starts from source: create ${next}.`, description: `Main resolves to a commit. Its builder.yaml and API_URL=${host} are frozen into AppVersion ${next}.` }
+      ? { id: 'select', phase: 'queue', label: `Pick ${next}`, title: `Activate starts from a built version, ${next}.`, description: `No source and no build. ${next} brings its own frozen API_URL=${host}. A new Deployment tracks the rollout.` }
+      : { id: 'select', phase: 'queue', label: `Create ${next}`, title: `Deploy starts from source: create ${next}.`, description: `Main resolves to a commit. Its builder.yaml and API_URL=${host} are frozen into AppVersion ${next}, and a Deployment starts tracking the rollout.` }
 
   return withBoundaries(scenario, boundaries, [
     select,

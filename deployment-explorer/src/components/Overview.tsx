@@ -1,8 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import {
   ArrowRight,
-  Braces,
+  Boxes,
   Check,
+  ClipboardList,
   Container,
   Database,
   FileCode2,
@@ -18,7 +19,7 @@ import {
   Users,
   type LucideIcon,
 } from 'lucide-react'
-import { operationName, type InspectId, type Scenario } from '../model'
+import { getDeploymentStatus, operationName, phaseLabels, type InspectId, type Scenario } from '../model'
 import { formatScaling, getConfigurationState } from '../configuration'
 import { getOverviewState, timelinePhaseLabels, type OverviewMilestone, type OverviewMilestoneId, type TimelinePhase } from '../overview'
 import './Overview.css'
@@ -215,6 +216,12 @@ export function Overview({ scenario, completedCount, isAnimating, motionDuration
 
   const versionCard = { label: state.newVersion, frozen: !builds || state.reached('select') }
 
+  const deploymentStatus = getDeploymentStatus(scenario, completedCount, state.cutover)
+  const deploymentLabel = deploymentStatus ? phaseLabels[deploymentStatus] : 'Creating'
+  const liveVersion = state.released ? state.newVersion : state.oldVersion
+  const appRuntime = liveVersion ? `${liveVersion} live` : 'no runtime yet'
+  const appRollout = state.released ? null : `${{ deploy: 'deploying', redeploy: 'redeploying', activate: 'activating' }[scenario.action]} ${state.newVersion}`
+
   const node = (key: NodeKey, group: 'build' | 'traffic', extra?: ReactNode) => {
     const Icon = nodeIcon[key]
     const point = nodePoint[key]
@@ -297,10 +304,7 @@ export function Overview({ scenario, completedCount, isAnimating, motionDuration
           <span className="flow-counter">{String(state.milestoneIndex + 1).padStart(2, '0')}<small>/ {String(stageCount).padStart(2, '0')}</small></span>
           <div><h2>{caption.title}</h2><p>{caption.description}</p></div>
         </div>
-        <div className="flow-caption-actions">
-          <button type="button" className={`overview-record-link${selected('deployment') ? ' is-selected' : ''}`} aria-pressed={selected('deployment')} onClick={() => onInspect('deployment')}><Braces size={15} aria-hidden="true" />Deployment record</button>
-          <button type="button" className="overview-detail-link" onClick={onTechnicalView}>Technical detail <ArrowRight size={16} aria-hidden="true" /></button>
-        </div>
+        <button type="button" className="overview-detail-link" onClick={onTechnicalView}>Technical detail <ArrowRight size={16} aria-hidden="true" /></button>
       </div>
 
       <ol className="stage-stepper" aria-label={`${operationName(scenario)} timeline`}>
@@ -340,6 +344,8 @@ export function Overview({ scenario, completedCount, isAnimating, motionDuration
                 <marker key={tone} id={`ov-arrow-${tone}`} className={`ov-arrow tone-${tone}`} markerUnits="userSpaceOnUse" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10 Z" /></marker>
               ))}
             </defs>
+            <path className="ov-owner-link" d="M 348 46 H 372" />
+            <path className="ov-owner-link" d="M 778 46 H 802" />
             {visiblePaths.map((key) => {
               const path = paths[key]
               const lineState = pathState[key]
@@ -353,8 +359,25 @@ export function Overview({ scenario, completedCount, isAnimating, motionDuration
             })}
           </svg>
 
-          <section className="ov-settings" aria-label="Builder App settings">
-            <button type="button" className={`ov-settings-title${selected('app') ? ' is-selected' : ''}`} aria-label="Inspect Builder App settings" aria-pressed={selected('app')} onClick={() => onInspect('app')}>Builder App settings</button>
+          <section className="ov-settings" aria-label="Builder App and its settings">
+            <button
+              type="button"
+              className={`ov-resource state-${stateOf(['select', 'verify'])}${selected('app') ? ' is-selected' : ''}`}
+              aria-label={`Inspect Builder App: ${appRuntime}${appRollout ? `, ${appRollout}` : ''}`}
+              aria-pressed={selected('app')}
+              onClick={() => onInspect('app')}
+            >
+              <span className="ov-resource-icon"><Boxes size={20} strokeWidth={1.8} aria-hidden="true" /></span>
+              <span className="ov-resource-name">
+                <strong>Builder App</strong>
+                <code>deployment-explorer-demo</code>
+                <span>Microsoft.Web/builderApps</span>
+              </span>
+              <span className="ov-resource-runtime">
+                <b className={liveVersion ? undefined : 'is-empty'}>{appRuntime}</b>
+                {appRollout && <span>{appRollout}</span>}
+              </span>
+            </button>
             <button type="button" className={`ov-chip chip-version state-${versionChipState}${selected('versionConfig') ? ' is-selected' : ''}`} aria-label="Inspect version configuration" aria-pressed={selected('versionConfig')} onClick={() => onInspect('versionConfig')} data-use={settings.desiredUse}>
               <span className="ov-chip-eyebrow"><LockKeyhole size={13} aria-hidden="true" />Version config</span>
               <code>API_URL = {settings.desiredHost}</code>
@@ -367,7 +390,18 @@ export function Overview({ scenario, completedCount, isAnimating, motionDuration
             </button>
           </section>
 
-          <span className="ov-lane-title lane-release" aria-hidden="true">Pipeline</span>
+          <button
+            type="button"
+            className={`ov-record status-${deploymentStatus ?? 'none'}${current === 'select' ? ' state-current' : ''}${selected('deployment') ? ' is-selected' : ''}`}
+            aria-label={`Inspect Deployment: ${deploymentLabel}`}
+            aria-pressed={selected('deployment')}
+            onClick={() => onInspect('deployment')}
+            data-status={deploymentStatus ?? 'none'}
+          >
+            <ClipboardList size={14} strokeWidth={2} aria-hidden="true" />
+            <span>Deployment</span>
+            <b>{deploymentLabel}</b>
+          </button>
           <span className="ov-lane-title lane-traffic" aria-hidden="true">Live traffic</span>
 
           {node('source', 'build')}

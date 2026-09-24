@@ -2,7 +2,8 @@
 
 Interactive React visualization of the Embr Builder App deployment lifecycle. It covers first
 deploy, deploying the latest commit, activating the previous version, and redeploying the active
-version. Version configuration and scaling appear as clickable Builder App settings.
+version. The Builder App resource and its two settings, version configuration and scaling, sit
+above the pipeline, and the Deployment that tracks each rollout heads it.
 
 ## Views
 
@@ -31,10 +32,13 @@ Configuration is drawn where it enters the flow:
 - **Scaling** drops straight into the Artifact App. Every deploy, redeploy, and activation uses
   the current policy, and changing it updates the running app in place.
 
-Click `builder.yaml`, either setting, **Builder App settings**, any map element, or **Deployment
-record** to see its JSON at the current stage. `builder.yaml` also shows the parsed manifest the
-AppVersion stores. At laptop widths the inspector docks beside the map, so every element stays
-clickable while you step through stages.
+Click the **Builder App**, `builder.yaml`, either setting, any map element, or the **Deployment**
+to see its JSON at the current stage. The Builder App opens as its ARM resource
+(`Microsoft.Web/builderApps`, variable names only), then the document Regional stores; its card
+shows which version is live. The Deployment shows its status as the rollout advances: Creating,
+then Building, Pending, or Provisioning, then Health check, Routing, and Succeeded. `builder.yaml`
+also shows the parsed manifest the AppVersion stores. At laptop widths the inspector docks beside
+the map, so every element stays clickable while you step through stages.
 
 The flow shows a temporary ADC build sandbox per component, the api image pushed to Embr ACR, the
 ADC Artifact whose creation makes ADC pull that image, the new Artifact App beside the live one, the

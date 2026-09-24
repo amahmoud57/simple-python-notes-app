@@ -149,11 +149,14 @@ describe('Deployment Overview', () => {
     ])
   })
 
-  it('opens JSON for builder.yaml, settings, map elements, and the Deployment without leaving the Overview', () => {
+  it('opens JSON for the Builder App, builder.yaml, settings, map elements, and the Deployment without leaving the Overview', () => {
     const { container } = render(<App />)
     const drawer = () => screen.getByRole('complementary', { name: /./ })
     const codeBlocks = () => [...container.querySelectorAll('.detail-code code')].map((block) => block.textContent ?? '')
     const headings = () => [...container.querySelectorAll('.detail-code-heading span')].map((heading) => heading.textContent)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect Deployment: Creating' }))
+    expect(JSON.parse(codeBlocks()[0])).toMatchObject({ id: 'adp_demo', state: 'not created yet' })
 
     fireEvent.click(chip('builder.yaml'))
     expect(drawer()).toHaveTextContent('builder.yaml')
@@ -175,11 +178,10 @@ describe('Deployment Overview', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /^Inspect AppVersion/ }))
     expect(JSON.parse(codeBlocks()[0]).manifest.name).toBe('shop')
-    fireEvent.click(screen.getByRole('button', { name: 'Inspect Builder App settings' }))
-    expect(JSON.parse(codeBlocks()[0]).versionConfiguration.variables[0].name).toBe('API_URL')
-    fireEvent.click(screen.getByRole('button', { name: 'Deployment record' }))
-    expect(JSON.parse(codeBlocks()[0])).toMatchObject({ id: 'adp_demo', state: 'not created yet' })
-    fireEvent.click(screen.getByRole('button', { name: 'Next stage' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect Builder App: no runtime yet, deploying v1' }))
+    expect(JSON.parse(codeBlocks()[0])).toMatchObject({ type: 'Microsoft.Web/builderApps', properties: { versionConfiguration: { variables: [{ name: 'API_URL' }] } } })
+    expect(headings()[1]).toBe('Regional BuilderApp persistence document')
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect Deployment: Building' }))
     expect(JSON.parse(codeBlocks()[0])).toMatchObject({ id: 'adp_demo', status: 'building', action: 'deploy' })
     fireEvent.click(screen.getByRole('button', { name: /^Inspect v1 Artifact App/ }))
     expect(codeBlocks()[0]).toContain('Microsoft.App/artifactApps')
@@ -187,6 +189,18 @@ describe('Deployment Overview', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close component details' }))
     expect(container.querySelector('.detail-drawer')).not.toBeInTheDocument()
     expect(screen.getByRole('tabpanel', { name: 'Overview' })).toBeInTheDocument()
+  })
+
+  it('shows the Deployment status and the Builder App runtime as stages advance', () => {
+    render(<App />)
+    const label = (prefix: string) => screen.getByRole('button', { name: new RegExp(`^Inspect ${prefix}: `) }).getAttribute('aria-label')!.replace(`Inspect ${prefix}: `, '')
+    const statuses = ['Creating', 'Building', 'Building', 'Provisioning', 'Provisioning', 'Health check', 'Routing', 'Routing', 'Succeeded'].map((_, index) => {
+      if (index > 0) fireEvent.click(screen.getByRole('button', { name: 'Next stage' }))
+      if (index === 0) expect(label('Builder App')).toBe('no runtime yet, deploying v1')
+      return label('Deployment')
+    })
+    expect(statuses).toEqual(['Creating', 'Building', 'Building', 'Provisioning', 'Provisioning', 'Health check', 'Routing', 'Routing', 'Succeeded'])
+    expect(label('Builder App')).toBe('v1 live')
   })
 
   it('carries the commit and frozen config into the AppVersion, then image and scaling into the new app', () => {

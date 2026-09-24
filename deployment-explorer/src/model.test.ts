@@ -3,6 +3,7 @@ import {
   completionLabel,
   executionSurfaceLabels,
   getCutoverState,
+  getDeploymentStatus,
   getInspectMeta,
   getNodeApi,
   getNodeExample,
@@ -17,6 +18,8 @@ import { getOverviewMilestones, getOverviewState } from './overview'
 import { baseScaling, getConfigurationState, versionHost } from './configuration'
 
 const countAfter = (scenario: Scenario, id: string) => scenario.steps.findIndex((step) => step.id === id) + 1
+const regionalApp = (scenario: Scenario, completedCount: number, cutover: Parameters<typeof getNodeExample>[3]) =>
+  getNodeExample('app', scenario, completedCount, cutover).related?.[0]?.body ?? ''
 const cpuScale = (min: number, max: number, cpu: number) => ({ minReplicas: min, maxReplicas: max, rules: [{ name: 'cpu', type: 'cpu', metadata: { type: 'Utilization', value: String(cpu) } }] })
 
 describe('configuration lifecycles', () => {
@@ -27,7 +30,7 @@ describe('configuration lifecycles', () => {
     const created = JSON.parse(getNodeExample('version', scenario, countAfter(scenario, 'create-version'), 'existing').body)
     expect(created.configuration.variables).toEqual([{ name: 'API_URL', value: 'https://api.contoso.com' }])
     expect(created.configuration).not.toHaveProperty('scaling')
-    const app = JSON.parse(getNodeExample('app', scenario, 0, 'existing').body)
+    const app = JSON.parse(regionalApp(scenario, 0, 'existing'))
     expect(app.runtime.versionConfiguration.variables[0].value).toBe('https://legacy.contoso.com')
     expect(app.scaling).toEqual({ components: [{ name: 'api', ...baseScaling }] })
   })
@@ -37,7 +40,7 @@ describe('configuration lifecycles', () => {
     const scenario = getScenario('activate')
     const restored = getConfigurationState(scenario)
     expect(restored).toMatchObject({ desiredUse: 'unused', desiredHost: 'api.contoso.com', nextHost: 'legacy.contoso.com', scaling: baseScaling })
-    const app = JSON.parse(getNodeExample('app', scenario, scenario.steps.length, 'deleted').body)
+    const app = JSON.parse(regionalApp(scenario, scenario.steps.length, 'deleted'))
     expect(app.versionConfiguration.variables[0].value).toBe('https://api.contoso.com')
     expect(app.runtime.versionConfiguration.variables[0].value).toBe('https://legacy.contoso.com')
     expect(app.scaling).toEqual({ components: [{ name: 'api', ...baseScaling }] })
@@ -197,6 +200,39 @@ describe('deployment overview', () => {
     const state = getOverviewState(getScenario('redeploy'), 0)
     expect(state.oldVersion).toBe('v17')
     expect(state.newVersion).toBe('v17')
+  })
+
+  it.each(scenarios)('creates the $id Deployment in the first stage and reports the status its JSON shows', (scenario) => {
+    const milestones = getOverviewMilestones(scenario)
+    expect(scenario.steps[milestones[0].end - 1].id).toMatch(/(^|-)create-deployment$/)
+    for (let count = 0; count <= scenario.steps.length; count += 1) {
+      const cutover = getCutoverState(scenario, count)
+      const status = getDeploymentStatus(scenario, count, cutover)
+      const record = JSON.parse(getNodeExample('deployment', scenario, count, cutover).body)
+      if (status === null) expect(record.state).toBe('not created yet')
+      else expect(record.status).toBe(status)
+    }
+    const statusAt = (id: string) => {
+      const start = milestones.find((milestone) => milestone.id === id)!.start
+      return getDeploymentStatus(scenario, start, getCutoverState(scenario, start))
+    }
+    expect(statusAt('select')).toBeNull()
+    expect(statusAt('publish')).toBe(scenario.id === 'activate' ? 'pending' : scenario.id === 'redeploy' ? 'provisioning' : 'building')
+    expect(statusAt('artifact')).toBe('provisioning')
+    expect(statusAt('check')).toBe('healthChecking')
+    expect(statusAt('release')).toBe('activating')
+    expect(statusAt('cleanup')).toBe('succeeded')
+  })
+
+  it('gives each Reused stage the worker step that confirms the retained outputs', () => {
+    for (const id of ['redeploy', 'activate'] as const) {
+      const scenario = getScenario(id)
+      const reused = getOverviewMilestones(scenario).find((milestone) => milestone.id === 'publish')!
+      expect(scenario.steps.slice(reused.start, reused.end).map((step) => step.id)).toEqual([`${id}-prepare`])
+    }
+    const prepare = getScenario('redeploy').steps.find((step) => step.id === 'redeploy-prepare')!
+    expect(prepare.api).toContain('RequireReusableVersion')
+    expect(prepare.result).toContain('no build operation')
   })
 
   it('rejects an incomplete scenario instead of inventing a release boundary', () => {
@@ -414,10 +450,10 @@ describe('deployment model', () => {
     const operation = getNodeExample('deployment', scenario, activateIndex + 1, 'switched').body
     expect(operation).toContain(`"publicUrl": "https://${hostname}"`)
 
-    const beforePromotion = getNodeExample('app', scenario, promoteIndex, 'verified').body
+    const beforePromotion = regionalApp(scenario, promoteIndex, 'verified')
     expect(beforePromotion).toContain('"runtime": null')
 
-    const promoted = getNodeExample('app', scenario, promoteIndex + 1, 'active').body
+    const promoted = regionalApp(scenario, promoteIndex + 1, 'active')
     expect(promoted).toContain(`"url": "https://${hostname}"`)
   })
 
@@ -503,12 +539,12 @@ describe('deployment model', () => {
     expect(buildIndex).toBeLessThan(readyIndex)
     expect(readyIndex).toBeLessThan(provisionIndex)
 
-    const initialApp = getNodeExample('app', scenario, 0, 'empty').body
+    const initialApp = regionalApp(scenario, 0, 'empty')
     expect(initialApp).toContain('"authorization"')
     expect(initialApp).toContain('"providerSubjectId": "github-user-842"')
     expect(initialApp).toContain('"pendingDeploymentId": null')
 
-    const reservedApp = getNodeExample('app', scenario, reserveIndex + 1, 'empty').body
+    const reservedApp = regionalApp(scenario, reserveIndex + 1, 'empty')
     expect(reservedApp).toContain('"pendingDeploymentId": "adp_demo"')
 
     const beforeDeployment = getNodeExample('deployment', scenario, deploymentIndex, 'empty').body
@@ -616,7 +652,7 @@ describe('deployment model', () => {
 
   it('freezes desired version configuration into AppVersion and Deployment records', () => {
     const scenario = getScenario('latest')
-    const app = getNodeExample('app', scenario, 0, 'existing').body
+    const app = regionalApp(scenario, 0, 'existing')
     const version = getNodeExample('version', scenario, scenario.steps.length, 'deleted').body
     const deployment = getNodeExample('deployment', scenario, scenario.steps.length, 'deleted').body
 
@@ -633,7 +669,7 @@ describe('deployment model', () => {
 
   it('shows current source authorization and BYO Entra route auth without scope or role requirements', () => {
     const scenario = getScenario('latest')
-    const app = getNodeExample('app', scenario, 0, 'existing').body
+    const app = regionalApp(scenario, 0, 'existing')
     const route = getNodeExample('route', scenario, scenario.steps.length, 'deleted').body
 
     expect(app).toContain('"authorization"')
@@ -647,10 +683,28 @@ describe('deployment model', () => {
     expect(route).not.toContain('requiredRoles')
   })
 
+  it('shows the Builder App first as its ARM resource, with variable names only', () => {
+    const scenario = getScenario('latest')
+    const before = getNodeExample('app', scenario, 0, 'existing')
+    const resource = JSON.parse(before.body)
+    expect(before.title).toContain('Microsoft.Web/builderApps')
+    expect(resource).toMatchObject({ name: 'deployment-explorer-demo', type: 'Microsoft.Web/builderApps', location: 'westus2', identity: { type: 'None' } })
+    expect(resource.id).toMatch(/\/resourceGroups\/rg-builder-cli-demo-amahmoud11\/providers\/Microsoft\.Web\/builderApps\/deployment-explorer-demo$/)
+    expect(resource.properties).toMatchObject({ sourceIntegrationState: 'Configured', provisioningState: 'Succeeded', automation: { autoDeploy: false } })
+    expect(resource.properties.versionConfiguration).toEqual({ variables: [{ name: 'API_URL' }], components: [{ name: 'web' }, { name: 'api' }] })
+    expect(resource.properties.runtime).toMatchObject({ activeDeploymentId: 'adp_previous', versionConfiguration: { variables: [{ name: 'API_URL' }] } })
+    expect(before.body).not.toContain('contoso.com')
+    expect(before.related?.map((document) => document.title)).toEqual(['Regional BuilderApp persistence document'])
+
+    const after = JSON.parse(getNodeExample('app', scenario, scenario.steps.length, 'deleted').body)
+    expect(after.properties.runtime).toMatchObject({ activeDeploymentId: 'adp_latest', activeAppVersionId: scenario.appVersionId })
+    expect(JSON.parse(getNodeExample('app', getScenario('manual'), 0, 'empty').body).properties.runtime).toBeNull()
+  })
+
   it('shows cleanup reacquiring app admission after deployment success', () => {
     const scenario = getScenario('latest')
-    const cleaning = getNodeExample('app', scenario, scenario.steps.length - 1, 'deleting').body
-    const cleaned = getNodeExample('app', scenario, scenario.steps.length, 'deleted').body
+    const cleaning = regionalApp(scenario, scenario.steps.length - 1, 'deleting')
+    const cleaned = regionalApp(scenario, scenario.steps.length, 'deleted')
 
     expect(cleaning).toContain('"pendingDeploymentId": "adp_latest"')
     expect(cleaning).toContain('"pendingDeploymentCleanupEpoch": 4')

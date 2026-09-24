@@ -740,6 +740,18 @@ const redeploySteps: FlowStep[] = [
       api: 'IBuilderAppDeploymentRepository.CreateAsync(deployment with { AppVersionId = retainedVersionId })',
     }),
     step({
+      id: 'redeploy-prepare',
+      phase: 'provisioning',
+      title: 'Reuse the active version outputs',
+      source: 'deployment',
+      target: 'version',
+      payload: 'ver_17 outputs -> runtime plan',
+      payloadKind: 'resource',
+      reason: 'The worker skips source checks, confirms ver_17 is still Ready and its outputs still resolve, builds the runtime plan, and records those outputs on the Deployment. Nothing is checked out or built.',
+      result: 'Deployment adp_redeploy: provisioning; outputs recorded; no build operation created',
+      api: 'DriveOwnedAsync -> RequireReusableVersion -> BuildPlan -> Outputs',
+    }),
+    step({
       id: 'redeploy-artifact',
       phase: 'provisioning',
       title: 'Recreate the deployment-owned ADC Artifact',
@@ -747,7 +759,7 @@ const redeploySteps: FlowStep[] = [
       target: 'artifact',
       payload: 'retained OCI digest',
       payloadKind: 'image',
-      reason: 'The new Deployment imports the retained image under its own deterministic resource ID.',
+      reason: 'The new Deployment PUTs its own ADC Artifact for the retained image digest. That PUT makes ADC pull the image from Embr ACR again; Embr waits for the Artifact Version to be Ready.',
       result: 'new ADC Artifact Version: Ready',
       api: 'PUT .../providers/Microsoft.App/artifacts/embr-{newDeploymentHash}',
       executionSurface: 'armApi',
@@ -1104,6 +1116,18 @@ function json(value: unknown): string {
   return JSON.stringify(value, null, 2)
 }
 
+/** The Deployment record's status after `completedCount` steps, or null before the record exists. */
+export function getDeploymentStatus(scenario: Scenario, completedCount: number, cutover: CutoverState): Phase | null {
+  const completedIds = new Set(scenario.steps.slice(0, completedCount).map((item) => item.id))
+  if (![...completedIds].some((item) => item === 'create-deployment' || item.endsWith('-create-deployment'))) return null
+  if (['active', 'cleanupPending', 'deleting', 'deleted'].includes(cutover)) return 'succeeded'
+  if (['healthy', 'switched', 'verified'].includes(cutover)) return 'activating'
+  if (cutover === 'nativeReady') return 'healthChecking'
+  if (scenario.id === 'activate' && !completedIds.has('activate-prepare')) return 'pending'
+  const versionReady = scenario.id === 'redeploy' || scenario.id === 'activate' || completedIds.has('finish-version-build')
+  return versionReady || cutover === 'candidate' ? 'provisioning' : 'building'
+}
+
 export function getNodeExample(
   id: InspectId,
   scenario: Scenario,
@@ -1134,20 +1158,7 @@ export function getNodeExample(
   const promoted = ['active', 'cleanupPending', 'deleting', 'deleted'].includes(cutover)
   const cleanupInProgress = cutover === 'deleting'
   const cleanupCompleted = [...completedIds].some((item) => item.endsWith('post-deployment-cleanup'))
-  const activationPending = scenario.id === 'activate'
-    && deploymentCreated
-    && !completedIds.has('activate-prepare')
-  const deploymentStatus = promoted
-    ? 'succeeded'
-    : candidateHealthy
-      ? 'activating'
-      : candidateNativeReady
-        ? 'healthChecking'
-        : activationPending
-          ? 'pending'
-          : versionReady || candidateCreated
-            ? 'provisioning'
-            : deploymentCreated ? 'building' : 'pending'
+  const deploymentStatus = getDeploymentStatus(scenario, completedCount, cutover) ?? 'pending'
   const workerClaimed = deploymentCreated && (retainedVersion || completedIds.has('start-version-build'))
   const candidateRecorded = candidateCreated || [...completedIds].some((item) => item.endsWith('-artifact'))
   const deploymentTime = (time: string) => `${retainedVersion ? '2026-09-22' : '2026-09-16'}T${time}Z`
@@ -1206,8 +1217,34 @@ export function getNodeExample(
     case 'deployment':
       if (!deploymentCreated) return { title: 'Deployment before creation', format: 'JSON', body: json({ id: deploymentId, state: 'not created yet', waitingFor: 'validated Builder App configuration and trigger metadata' }) }
       return { title: 'BuilderAppDeployment operation document', format: 'JSON', body: json({ id: deploymentId, appId: 'app_shop', appVersionId: versionId, status: deploymentStatus, action: deploymentAction, configuration: frozenConfiguration, executionEpoch: workerClaimed ? 1 : 0, candidateArtifactAppResourceId: candidateRecorded ? `/subscriptions/runtime-sub/resourceGroups/runtime-rg/providers/Microsoft.App/artifactApps/${candidateName}` : undefined, candidateFqdn: candidateNativeReady ? candidateFqdn : undefined, previousDeploymentId: scenario.hasExistingRuntime ? 'adp_previous' : undefined, outputs: versionReady ? [{ componentName: 'web', outputId: 'static', kind: 'static', reference: staticReference }, { componentName: 'api', outputId: 'server', kind: 'compute', reference: image }] : undefined, publicUrl: switched ? demoCustomerUrl : undefined, postDeploymentCleanupStatus: promoted ? cleanupCompleted ? 'completed' : 'pending' : undefined, createdAt: deploymentTime('18:37:59'), startedAt: deploymentTime('18:37:59'), activatedAt: switched ? deploymentTime('18:43:40') : undefined, completedAt: promoted ? deploymentTime('18:44:05') : undefined }) }
-    case 'app':
-      return { title: 'Regional BuilderApp persistence document', format: 'JSON', body: json({ id: 'app_shop', name: 'deployment-explorer-demo', subscriptionId: '64fc8655-6859-4b06-96d2-df698d5808cc', resourceGroup: 'rg-builder-cli-demo-amahmoud11', location: 'westus2', provisioningState: 'Succeeded', lifecycleId: 'ali_31', source: { provider: 'github', id: '1211637325', displayName: 'amahmoud57/simple-python-notes-app', reference: 'demo/builder-deployment-explorer', authorization: { provider: 'github', providerSubjectId: 'github-user-842', armTenantId: '72f988bf-86f1-41af-91ab-2d7cd011db47', armObjectId: '093b6f15-6e26-4906-b372-10c4fe0c3eb0', authorizedAt: '2026-09-22T18:30:00Z' } }, versionConfiguration: configurationDocument(settings.desiredHost), scaling: scalingDocument(settings.scaling), automation: { autoDeploy: false }, routeAuthRevision: 12, routeAuthAppliedRevision: switched ? 12 : 11, pendingDeploymentId: cleanupInProgress || appReserved && !promoted ? deploymentId : null, pendingDeploymentCleanupEpoch: cleanupInProgress ? 4 : undefined, runtime: promoted ? { activeDeploymentId: deploymentId, activeAppVersionId: versionId, versionConfiguration: frozenConfiguration, url: demoCustomerUrl } : scenario.hasExistingRuntime ? { activeDeploymentId: 'adp_previous', activeAppVersionId: previousVersionId, versionConfiguration: previousConfiguration, url: demoCustomerUrl } : null }) }
+    case 'app': {
+      const names = (configuration: { variables: { name: string }[]; components: { name: string }[] }) => ({
+        variables: configuration.variables.map(({ name }) => ({ name })),
+        components: configuration.components.map(({ name }) => ({ name })),
+      })
+      const armRuntime = promoted
+        ? { url: demoCustomerUrl, activeDeploymentId: deploymentId, activeAppVersionId: versionId, versionConfiguration: names(frozenConfiguration) }
+        : scenario.hasExistingRuntime && previousConfiguration
+          ? { url: demoCustomerUrl, activeDeploymentId: 'adp_previous', activeAppVersionId: previousVersionId, versionConfiguration: names(previousConfiguration) }
+          : null
+      const armResource = {
+        id: '/subscriptions/64fc8655-6859-4b06-96d2-df698d5808cc/resourceGroups/rg-builder-cli-demo-amahmoud11/providers/Microsoft.Web/builderApps/deployment-explorer-demo',
+        name: 'deployment-explorer-demo',
+        type: 'Microsoft.Web/builderApps',
+        location: 'westus2',
+        identity: { type: 'None' },
+        properties: {
+          source: { provider: 'github', id: '1211637325', displayName: 'amahmoud57/simple-python-notes-app', reference: 'demo/builder-deployment-explorer' },
+          sourceIntegrationState: 'Configured',
+          provisioningState: 'Succeeded',
+          versionConfiguration: names(configurationDocument(settings.desiredHost)),
+          automation: { autoDeploy: false },
+          scaling: scalingDocument(settings.scaling),
+          runtime: armRuntime,
+        },
+      }
+      return { title: 'ARM resource (GET Microsoft.Web/builderApps/deployment-explorer-demo)', format: 'JSON', body: json(armResource), related: [{ title: 'Regional BuilderApp persistence document', format: 'JSON', body: json({ id: 'app_shop', name: 'deployment-explorer-demo', subscriptionId: '64fc8655-6859-4b06-96d2-df698d5808cc', resourceGroup: 'rg-builder-cli-demo-amahmoud11', location: 'westus2', provisioningState: 'Succeeded', lifecycleId: 'ali_31', source: { provider: 'github', id: '1211637325', displayName: 'amahmoud57/simple-python-notes-app', reference: 'demo/builder-deployment-explorer', authorization: { provider: 'github', providerSubjectId: 'github-user-842', armTenantId: '72f988bf-86f1-41af-91ab-2d7cd011db47', armObjectId: '093b6f15-6e26-4906-b372-10c4fe0c3eb0', authorizedAt: '2026-09-22T18:30:00Z' } }, versionConfiguration: configurationDocument(settings.desiredHost), scaling: scalingDocument(settings.scaling), automation: { autoDeploy: false }, routeAuthRevision: 12, routeAuthAppliedRevision: switched ? 12 : 11, pendingDeploymentId: cleanupInProgress || appReserved && !promoted ? deploymentId : null, pendingDeploymentCleanupEpoch: cleanupInProgress ? 4 : undefined, runtime: promoted ? { activeDeploymentId: deploymentId, activeAppVersionId: versionId, versionConfiguration: frozenConfiguration, url: demoCustomerUrl } : scenario.hasExistingRuntime ? { activeDeploymentId: 'adp_previous', activeAppVersionId: previousVersionId, versionConfiguration: previousConfiguration, url: demoCustomerUrl } : null }) }] }
+    }
     case 'github':
       return { title: 'GitHub source identity', format: 'JSON', body: json({ provider: 'github', id: '1211637325', displayName: 'amahmoud57/simple-python-notes-app', reference: 'demo/builder-deployment-explorer', revision: '9f42c1e4a77b81f6d49d3c2a...' }) }
     case 'manifest':

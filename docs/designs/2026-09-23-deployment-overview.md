@@ -76,9 +76,10 @@ not live telemetry or controls that mutate the stamp.
 
 ### Verification Results
 
-- 87 Vitest tests pass, covering commands and Deployment actions, the shared CLI timeline,
+- 94 Vitest tests pass, covering commands and Deployment actions, the shared CLI timeline,
   both configuration lifecycles, the `builder.yaml` contract, per-component build order, Deployment
-  document timing, every deploy journey, Overview JSON inspection, playback, and Technical map fit.
+  document timing and status per stage, the Builder App ARM view, every deploy journey, Overview
+  JSON inspection, playback, and Technical map fit.
 - TypeScript/Vite production build and Oxlint pass.
 - Playwright verified all four scenarios, health-before-traffic ordering, release
   success before cleanup, view switching, keyboard stage navigation, and pause. Traversed lines
@@ -238,6 +239,14 @@ background worker, and each document fills in as the rollout advances:
    after the direct health check, then the public URL when YARP switches, and finally `succeeded`.
 
 Overview shows this as two Build stages, web then api. Technical shows each step.
+
+The Overview draws both records as clickable resources. The Builder App
+(`Microsoft.Web/builderApps`) sits between its two settings, shows which version is live, and
+opens as its ARM resource with variable names only, then the Regional document. The Deployment
+heads the pipeline lane with its current status. Its first stage ends once the Deployment exists,
+so stage 2 shows it Building (deploy), Pending (activate), or Provisioning (redeploy). For activate
+and redeploy, the Reused stage is the worker confirming the retained version's outputs before
+it creates the Artifact.
 
 <details>
 <summary>Build and runtime provenance</summary>
