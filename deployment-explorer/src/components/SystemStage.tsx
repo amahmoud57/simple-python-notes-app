@@ -25,9 +25,11 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import {
+  completionLabel,
   executionSurfaceLabels,
   getNodeLabel,
   nodes,
+  operationName,
   phaseLabels,
   type CutoverState,
   type FlowStep,
@@ -149,7 +151,7 @@ function transferGeometry(source: NodeId, target: NodeId, stageWidth: number) {
 function providerState(cutover: CutoverState, scenario: Scenario) {
   const old = scenario.oldVersion ?? 'previous version'
   const next = scenario.newVersion
-  if (scenario.kind !== 'deploy') {
+  if (scenario.kind !== 'deployment') {
     return {
       old: `Serving 100% - ${old}`,
       next: 'Not needed',
@@ -230,7 +232,7 @@ function NodeButton({
   const dimmed = Boolean(step && !active && !context && !selected)
   const provider = providerState(cutover, scenario)
   const completedIds = new Set(scenario.steps.slice(0, completedCount).map((item) => item.id))
-  const retainedVersion = scenario.kind !== 'deploy' || scenario.id === 'commit' || scenario.id === 'redeploy' || scenario.id === 'activate'
+  const retainedVersion = scenario.kind !== 'deployment' || scenario.id === 'commit' || scenario.id === 'redeploy' || scenario.id === 'activate'
   const versionCreated = retainedVersion || completedIds.has('create-version')
   const deploymentCreated = completedIds.has('create-deployment')
     || [...completedIds].some((item) => item.endsWith('-create-deployment'))
@@ -244,7 +246,7 @@ function NodeButton({
   const deploymentStatus = deploymentSucceeded
     ? { text: 'Succeeded', tone: 'serving' }
     : ['switched', 'verified', 'active'].includes(cutover)
-        ? { text: 'Activating', tone: 'existing' }
+        ? { text: 'Routing', tone: 'existing' }
         : activationPending
           ? { text: 'Pending', tone: 'pending' }
         : versionReady
@@ -263,7 +265,7 @@ function NodeButton({
           ? { text: 'Pending', tone: 'ready' }
           : { text: 'Not created', tone: 'idle' }
       : id === 'deployment'
-        ? scenario.kind !== 'deploy'
+        ? scenario.kind !== 'deployment'
           ? { text: 'Not needed', tone: 'empty' }
           : deploymentCreated
             ? deploymentStatus
@@ -449,7 +451,7 @@ export function SystemStage({
               </span>
             ) : null}
           </div>
-          <h2 id="active-step-title">{step?.title ?? (scenario.kind === 'deploy' ? 'Deployment complete' : 'Settings update complete')}</h2>
+          <h2 id="active-step-title">{step?.title ?? completionLabel(scenario)}</h2>
         </div>
         <div className="step-progress" aria-label={`${stepIndex} of ${scenario.steps.length} steps complete`}>
           <span style={{ width: `${(stepIndex / scenario.steps.length) * 100}%` }} />
@@ -470,7 +472,7 @@ export function SystemStage({
       <div className="transfer-brief" aria-live="polite">
         <div>
           <span>{isAnimating ? 'Happening now' : 'What happens now'}</span>
-          <strong>{step?.reason ?? (scenario.kind === 'deploy' ? 'All deployment work has completed.' : 'The settings update has completed.')}</strong>
+          <strong>{step?.reason ?? `All ${operationName(scenario).toLowerCase()} work has completed.`}</strong>
           {step ? (
             <p className="transfer-route">
               <b>{sourceLabel}</b>
@@ -482,7 +484,7 @@ export function SystemStage({
         </div>
         <div>
           <span>State after this step</span>
-          <strong>{step?.result ?? (scenario.kind === 'deploy' ? 'Deployment succeeded and cleanup is complete.' : scenario.kind === 'scale' ? 'Scaling saved and applied to the running app; no version changed.' : 'Desired configuration saved for the next AppVersion; the running app is unchanged.')}</strong>
+          <strong>{step?.result ?? (scenario.kind === 'deployment' ? `${operationName(scenario)} succeeded and cleanup is complete.` : scenario.kind === 'scale' ? 'Scaling saved and applied to the running app; no version changed.' : 'Desired configuration saved for the next AppVersion; the running app is unchanged.')}</strong>
         </div>
       </div>
 

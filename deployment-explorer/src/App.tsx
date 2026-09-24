@@ -18,6 +18,7 @@ import { SystemStage } from './components/SystemStage'
 import {
   getCutoverState,
   getScenario,
+  scenarioGroups,
   scenarios,
   type NodeId,
   type Scenario,
@@ -28,10 +29,15 @@ const transferDurationMs = 2500
 const readingPauseMs = 1200
 type ExplorerView = 'overview' | 'technical'
 const readView = (): ExplorerView => window.location.hash.split('/')[0] === '#technical' ? 'technical' : 'overview'
-const scenarioGroups = [
-  { label: 'Deploy', items: scenarios.filter((item) => item.kind === 'deploy') },
-  { label: 'Change settings', items: scenarios.filter((item) => item.kind !== 'deploy') },
-]
+
+function CommandPreview({ scenario }: { scenario: Scenario }) {
+  return (
+    <div className="command-preview" role="group" aria-label="Command">
+      <code title={scenario.command.text}><b className={`surface-${scenario.command.surface}`}>{scenario.command.surface === 'cli' ? 'CLI' : 'ARM'}</b>{scenario.command.text}</code>
+      <span>{scenario.outcome}</span>
+    </div>
+  )
+}
 
 function App() {
   const [view, setView] = useState<ExplorerView>(readView)
@@ -204,10 +210,13 @@ function App() {
       <main className="explorer-main">
       <div className="command-bar">
         {view === 'overview' ? (
-          <label className="overview-flow-picker"><span>Scenario</span><select aria-label="Scenario" value={scenario.id} onChange={(event) => selectScenario(getScenario(event.target.value as Scenario['id']))}>{scenarioGroups.map((group) => <optgroup key={group.label} label={group.label}>{group.items.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</optgroup>)}</select></label>
+          <div className="overview-command-group">
+            <label className="overview-flow-picker"><select aria-label="Scenario" value={scenario.id} onChange={(event) => selectScenario(getScenario(event.target.value as Scenario['id']))}>{scenarioGroups.map((group) => <optgroup key={group.label} label={group.label}>{group.scenarios.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</optgroup>)}</select></label>
+            <CommandPreview scenario={scenario} />
+          </div>
         ) : (
         <div className="scenario-title">
-          <span>{scenario.label}</span>
+          <code className="scenario-command">{scenario.command.text}</code>
           <strong>{scenario.title}</strong>
         </div>
         )}
@@ -216,10 +225,10 @@ function App() {
             <RotateCcw size={18} />
           </button>
           <button type="button" onClick={stepBack} disabled={isAnimating || completedCount === 0}>
-            <StepBack size={17} /> {usesStages ? 'Previous stage' : 'Previous step'}
+            <StepBack size={17} /> Previous <span className="control-noun">{usesStages ? 'stage' : 'step'}</span>
           </button>
           <button type="button" onClick={stepOnce} disabled={isAnimating || complete}>
-            <StepForward size={17} /> {usesStages ? 'Next stage' : 'Next step'}
+            <StepForward size={17} /> Next <span className="control-noun">{usesStages ? 'stage' : 'step'}</span>
           </button>
           {isPlaying ? (
             <button type="button" className="primary" onClick={pause}>

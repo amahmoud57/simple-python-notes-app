@@ -7,8 +7,25 @@ and scaling.
 
 ## Views
 
-**Overview** is one canvas for product and leadership demos. One scenario selector groups the
-deploy flows and the settings changes. Configuration is drawn where it enters the flow:
+**Overview** is one canvas for product and leadership demos. One scenario selector groups flows by
+what they start from, and the command bar shows the command each one runs:
+
+| Group | Scenario | Command | Creates |
+|---|---|---|---|
+| Deploy from source | First deploy, Deploy latest | `builder app deploy <name>` | Deployment, action `deploy`; builds a new AppVersion |
+| Deploy from source | Deploy commit | `builder app deploy <name> --commit <sha>` | Deployment, action `deploy`; reuses an exact match or builds |
+| Reuse a built version | Activate version | `builder app version activate <name> <version-id>` (or `--previous`) | Deployment, action `activate`; no build |
+| Reuse a built version | Redeploy | ARM `POST .../redeploy` (no CLI command) | Deployment, action `redeploy`; no build |
+| Change settings | Change version config | ARM `PUT` with `properties.versionConfiguration` | No Deployment |
+| Change settings | Change scaling | `builder app scale <name> --component api ...` | No Deployment |
+
+Every Deployment follows the Builder CLI timeline: Queue, Build, Provision, Verify, Route, and
+Cleanup. The stage stepper groups stages under those phases. Deploy fills Build with the build and
+package stages; activation and redeploy mark Build as reused, and completion reads "Deployment
+completed", "Activation completed", or "Redeploy completed". The API's `activating` status is the
+Route phase of every Deployment, so the demo labels it Routing, not activation.
+
+Configuration is drawn where it enters the flow:
 
 - **Version config** (`API_URL`) drops into the AppVersion with the commit and `builder.yaml`.
   It is frozen there and reaches both the build and the Artifact App. Saving a new value
@@ -25,10 +42,11 @@ Playback moves payloads along the active handoffs with one short caption. The st
 previous/next controls share progress with Technical.
 
 **Technical** retains the detailed sequence, API calls, resource examples, and inspection
-drawer for the same scenarios. Settings changes show the ARM `PUT`, Regional validation and
-persistence, and, for scaling, the in-place Artifact App `PUT`. The starting state lists the
-desired `versionConfiguration` and `scaling`; example JSON shows desired, frozen, and running
-values. The map fits its pane, with map-only zoom in, zoom out, and fit controls.
+drawer for the same scenarios. Its header shows the same command, and the sequence is named
+Deployment, Activation, Redeploy, or Settings update. Settings changes show the ARM `PUT`, Regional
+validation and persistence, and, for scaling, the in-place Artifact App `PUT`. The starting state
+lists the desired `versionConfiguration` and `scaling`; example JSON shows desired, frozen, and
+running values. The map fits its pane, with map-only zoom in, zoom out, and fit controls.
 
 - Overview: `/#overview` (also the default at `/`).
 - Technical: `/#technical`.

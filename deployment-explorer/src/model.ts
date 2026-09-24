@@ -96,7 +96,11 @@ export interface FlowStep {
 
 export interface Scenario {
   id: 'manual' | 'latest' | 'commit' | 'redeploy' | 'activate' | 'config' | 'scale'
-  kind: 'deploy' | 'config' | 'scale'
+  kind: 'deployment' | 'config' | 'scale'
+  /** BuilderAppDeployment.action; settings updates create no Deployment. */
+  action: 'deploy' | 'redeploy' | 'activate' | null
+  command: { surface: 'cli' | 'arm'; text: string }
+  outcome: string
   label: string
   title: string
   summary: string
@@ -121,7 +125,7 @@ export const phaseLabels: Record<Phase, string> = {
   building: 'Building',
   provisioning: 'Provisioning',
   healthChecking: 'Health check',
-  activating: 'Activating',
+  activating: 'Routing',
   postCleanup: 'Background cleanup',
   succeeded: 'Succeeded',
 }
@@ -138,7 +142,7 @@ export const nodes: SystemNode[] = [
   { id: 'arm', label: 'ARM API', eyebrow: 'Microsoft.Web', x: 184, y: 38, group: 'control' },
   { id: 'regional', label: 'Regional API', eyebrow: 'Orchestrator', x: 348, y: 38, group: 'control' },
   { id: 'app', label: 'Builder App', eyebrow: 'ARM resource', x: 512, y: 38, group: 'control' },
-  { id: 'deployment', label: 'Deployment operation', eyebrow: 'Build + release workflow', x: 676, y: 38, group: 'control' },
+  { id: 'deployment', label: 'Deployment', eyebrow: 'Rollout record', x: 676, y: 38, group: 'control' },
   { id: 'version', label: 'AppVersion', eyebrow: 'Immutable build record', x: 840, y: 38, group: 'control' },
   { id: 'github', label: 'GitHub', eyebrow: 'Source provider', x: 48, y: 226, group: 'source' },
   { id: 'manifest', label: 'builder.yaml', eyebrow: 'Component manifest', x: 230, y: 205, group: 'source' },
@@ -167,13 +171,13 @@ const demoCustomerUrl = `https://${demoCustomerHostname}`
 const createDeploymentStep = (deploymentId: string, appVersionId: string): FlowStep => step({
   id: 'create-deployment',
   phase: 'building',
-  title: 'Persist the operation for the new AppVersion',
+  title: 'Create the Deployment for the new AppVersion',
   source: 'version',
   target: 'deployment',
   payload: `${appVersionId} + frozen AppVersion configuration + previous provider`,
   payloadKind: 'resource',
-  reason: 'The AppVersion now exists. Regional copies its immutable version configuration and records the previous provider in a durable Building operation that references it.',
-  result: `Operation ${deploymentId}: building; appVersionId: ${appVersionId}; execution signaled`,
+  reason: 'The AppVersion now exists. Regional copies its immutable version configuration and records the previous provider in a durable Building Deployment with action deploy.',
+  result: `Deployment ${deploymentId}: building; action: deploy; appVersionId: ${appVersionId}; execution signaled`,
   api: 'IBuilderAppDeploymentRepository.CreateAsync(deployment with { AppVersionId = versionId })',
 })
 
@@ -299,7 +303,7 @@ const sourceBuildSteps = (
     payload: 'recorded build settings + immutable output references',
     payloadKind: 'resource',
     reason: 'For every component, Embr has recorded how to build and run it: platform, commands, output directory, role, port, and health path. Each component must also have at least one immutable output.',
-    result: `AppVersion ${appVersionId}: ready; the operation may now provision runtime resources`,
+    result: `AppVersion ${appVersionId}: ready; the Deployment may now provision runtime resources`,
     api: 'AppVersionBuildExecutionService.CompleteReadyAsync -> build.status = ready',
   }),
   step({
@@ -310,7 +314,7 @@ const sourceBuildSteps = (
     target: 'artifact',
     payload: 'digest-pinned image',
     payloadKind: 'image',
-    reason: 'The operation reads the ready AppVersion compute digest and imports that image into ADC for runtime provisioning.',
+    reason: 'The Deployment reads the ready AppVersion compute digest and imports that image into ADC for runtime provisioning.',
     result: 'ADC Artifact Version created from the recorded OCI digest: ready',
     api: 'PUT .../providers/Microsoft.App/artifacts/embr-{deploymentHash}',
     executionSurface: 'armApi',
@@ -391,13 +395,13 @@ const sourceBuildSteps = (
         step({
           id: 'promote-runtime',
           phase: 'succeeded',
-          title: 'Promote runtime and mark the operation succeeded',
+          title: 'Promote the runtime and mark the Deployment succeeded',
           source: 'customer',
           target: 'app',
           payload: `activeDeploymentId: ${deploymentId}`,
           payloadKind: 'route',
-          reason: 'After route verification, Embr persists the new runtime, marks the operation Succeeded, releases the app slot, and records postDeploymentCleanupStatus=pending.',
-          result: `${versionLabel} active; operation succeeded; previous provider is unrouted; background cleanup pending`,
+          reason: 'After route verification, Embr persists the new runtime, marks the Deployment Succeeded, releases the app slot, and records postDeploymentCleanupStatus=pending.',
+          result: `${versionLabel} active; Deployment succeeded; previous provider is unrouted; background cleanup pending`,
           api: `IBuilderAppRepository.UpdateWithRetryAsync(runtime.activeDeploymentId = ${deploymentId})`,
           cutoverAfter: 'cleanupPending',
         }),
@@ -425,8 +429,8 @@ const sourceBuildSteps = (
           target: 'app',
           payload: `activeDeploymentId: ${deploymentId}`,
           payloadKind: 'route',
-          reason: 'Only after the generated hostname succeeds through YARP does Embr create BuilderApp.runtime, mark the operation Succeeded, release the app slot, and queue post-deployment retention cleanup.',
-          result: `BuilderApp.runtime.url saved; ${versionLabel} active; operation succeeded; background cleanup pending`,
+          reason: 'Only after the generated hostname succeeds through YARP does Embr create BuilderApp.runtime, mark the Deployment Succeeded, release the app slot, and queue post-deployment retention cleanup.',
+          result: `BuilderApp.runtime.url saved; ${versionLabel} active; Deployment succeeded; background cleanup pending`,
           api: `IBuilderAppRepository.UpdateWithRetryAsync(runtime.activeDeploymentId = ${deploymentId})`,
           cutoverAfter: 'active',
         }),
@@ -488,13 +492,13 @@ const manualSteps: FlowStep[] = [
   step({
     id: 'reserve-app',
     phase: 'pending',
-    title: 'Reserve the Builder App for this operation',
+    title: 'Reserve the Builder App for this deployment',
     source: 'regional',
     target: 'app',
     payload: 'pendingDeploymentId: adp_demo',
     payloadKind: 'resource',
-    reason: 'TriggerAsync admits one non-terminal operation at a time by atomically claiming the Builder App pendingDeploymentId slot before resolving source.',
-    result: 'BuilderApp.pendingDeploymentId = adp_demo; no deployment operation document exists yet',
+    reason: 'TriggerAsync admits one non-terminal Deployment at a time by atomically claiming the Builder App pendingDeploymentId slot before resolving source.',
+    result: 'BuilderApp.pendingDeploymentId = adp_demo; no Deployment record exists yet',
     api: 'TriggerInternalAsync -> AdmitAsync -> TryAdmitDeploymentAsync',
   }),
   ...sourceBuildSteps(true, 'adp_demo', 'ver_demo', 'v1', false),
@@ -542,13 +546,13 @@ const latestRevisionSteps: FlowStep[] = [
   step({
     id: 'reserve-app',
     phase: 'pending',
-    title: 'Reserve the Builder App for this operation',
+    title: 'Reserve the Builder App for this deployment',
     source: 'regional',
     target: 'app',
     payload: 'pendingDeploymentId: adp_latest',
     payloadKind: 'resource',
     reason: 'TriggerAsync claims the pendingDeploymentId slot before resolving the latest branch head, so two manual deployments cannot start concurrently.',
-    result: 'BuilderApp.pendingDeploymentId = adp_latest; no deployment operation document exists yet',
+    result: 'BuilderApp.pendingDeploymentId = adp_latest; no Deployment record exists yet',
     api: 'TriggerInternalAsync -> AdmitAsync -> TryAdmitDeploymentAsync',
   }),
   ...sourceBuildSteps(true, 'adp_latest', 'ver_latest', 'v17', true),
@@ -583,7 +587,7 @@ const retainedRuntimeSteps = (
     target: 'candidate',
     payload: `${appVersionId} outputs + frozen version variables + current app scaling + HTTP Readiness probe`,
     payloadKind: 'resource',
-    reason: 'Activation is still blue-green: Embr creates a fresh provider from retained outputs and the selected version frozen variables, applies the app current scaling policy, and waits for every configured replica and app container to report Running, Started, and Ready.',
+    reason: 'Reusing a built version is still blue-green: Embr creates a fresh provider from its retained outputs and frozen variables, applies the app current scaling policy, and waits for every configured replica and app container to report Running, Started, and Ready.',
     result: 'ADC native readiness passed; candidate remains outside YARP traffic',
     api: 'ArtifactAppRuntimeProvider.CreateCandidateAsync -> WaitForReplicaReadinessAsync',
     executionSurface: 'armApi',
@@ -635,13 +639,13 @@ const retainedRuntimeSteps = (
   step({
     id: `${prefix}-promote`,
     phase: 'succeeded',
-    title: `Promote ${versionLabel} and mark the operation succeeded`,
+    title: `Promote ${versionLabel} and mark the Deployment succeeded`,
     source: 'customer',
     target: 'app',
     payload: `activeDeploymentId: ${deploymentId}`,
     payloadKind: 'route',
     reason: 'After route verification, Embr persists the selected version as active, marks the Deployment Succeeded, releases ordinary admission, and records cleanup pending.',
-    result: `${versionLabel} active; operation succeeded; background cleanup pending`,
+    result: `${versionLabel} active; Deployment succeeded; background cleanup pending`,
     api: `IBuilderAppRepository.UpdateWithRetryAsync(runtime.activeDeploymentId = ${deploymentId})`,
     cutoverAfter: 'cleanupPending',
   }),
@@ -727,13 +731,13 @@ const commitSteps: FlowStep[] = [
   step({
     id: 'commit-create-deployment',
     phase: 'provisioning',
-    title: 'Persist a Deploy operation for the matched AppVersion',
+    title: 'Create a deploy Deployment for the matched AppVersion',
     source: 'version',
     target: 'deployment',
     payload: 'ver_commit_71ab + SourceRevision + frozen configuration',
     payloadKind: 'resource',
-    reason: 'Because a retained exact match was selected, the new action remains Deploy but starts Provisioning instead of Building.',
-    result: 'Operation adp_commit: provisioning; action: deploy; sourceRevision: 71ab42d...',
+    reason: 'Because a retained exact match was selected, the Deployment action remains deploy but starts Provisioning instead of Building.',
+    result: 'Deployment adp_commit: provisioning; action: deploy; sourceRevision: 71ab42d...',
     api: 'IBuilderAppDeploymentRepository.CreateAsync(status = Provisioning, action = Deploy)',
   }),
   ...retainedRuntimeSteps('commit', 'adp_commit', 'ver_commit_71ab', 'v18'),
@@ -743,13 +747,13 @@ const redeploySteps: FlowStep[] = [
     step({
       id: 'redeploy-request',
       phase: 'pending',
-      title: 'Request a retained-version redeploy',
+      title: 'Request a redeploy of the active version',
       source: 'client',
       target: 'arm',
       payload: 'POST /redeploy',
       payloadKind: 'request',
-      reason: 'The customer asks for fresh runtime resources without resolving GitHub or rebuilding source.',
-      result: '202 Accepted + operation URL',
+      reason: 'An ARM-only action with no Builder CLI command. It asks for fresh runtime resources for the active version without resolving GitHub or rebuilding source.',
+      result: '202 Accepted + Azure-AsyncOperation URL',
       api: 'POST .../Microsoft.Web/builderApps/shop/redeploy',
       executionSurface: 'armApi',
     }),
@@ -793,13 +797,13 @@ const redeploySteps: FlowStep[] = [
     step({
       id: 'redeploy-create-deployment',
       phase: 'provisioning',
-      title: 'Create an operation for the retained AppVersion',
+      title: 'Create a redeploy Deployment for the retained AppVersion',
       source: 'version',
       target: 'deployment',
       payload: 'ver_17 + its frozen AppVersion configuration',
       payloadKind: 'resource',
-      reason: 'The retained AppVersion already exists and is ready. The operation copies that version frozen configuration, not the app current desired configuration, and skips source and build.',
-      result: 'Operation adp_redeploy: provisioning, action: redeploy, appVersionId: ver_17',
+      reason: 'The retained AppVersion already exists and is ready. The Deployment copies that version frozen configuration, not the app current desired configuration, and skips source and build.',
+      result: 'Deployment adp_redeploy: provisioning; action: redeploy; appVersionId: ver_17',
       api: 'IBuilderAppDeploymentRepository.CreateAsync(deployment with { AppVersionId = retainedVersionId })',
     }),
     step({
@@ -810,7 +814,7 @@ const redeploySteps: FlowStep[] = [
       target: 'artifact',
       payload: 'retained OCI digest',
       payloadKind: 'image',
-      reason: 'The new operation imports the retained image under its own deterministic resource ID.',
+      reason: 'The new Deployment imports the retained image under its own deterministic resource ID.',
       result: 'new ADC Artifact Version: Ready',
       api: 'PUT .../providers/Microsoft.App/artifacts/embr-{newDeploymentHash}',
       executionSurface: 'armApi',
@@ -875,13 +879,13 @@ const redeploySteps: FlowStep[] = [
     step({
       id: 'redeploy-promote',
       phase: 'succeeded',
-      title: 'Promote ver_17 and mark the operation succeeded',
+      title: 'Promote ver_17 and mark the Deployment succeeded',
       source: 'customer',
       target: 'app',
       payload: 'activeDeploymentId: adp_redeploy',
       payloadKind: 'route',
-      reason: 'After route verification, Embr persists the new runtime, marks the operation Succeeded, releases the app slot, and records postDeploymentCleanupStatus=pending.',
-      result: 'new provider active; operation succeeded; previous provider is unrouted; background cleanup pending',
+      reason: 'After route verification, Embr persists the new runtime, marks the Deployment Succeeded, releases the app slot, and records postDeploymentCleanupStatus=pending.',
+      result: 'new provider active; Deployment succeeded; previous provider is unrouted; background cleanup pending',
       api: 'IBuilderAppRepository.UpdateWithRetryAsync(runtime.activeDeploymentId)',
       cutoverAfter: 'cleanupPending',
     }),
@@ -905,12 +909,12 @@ const activateSteps: FlowStep[] = [
   step({
     id: 'activate-request',
     phase: 'pending',
-    title: 'Request one frozen AppVersion explicitly',
+    title: 'Activate one built AppVersion by ID',
     source: 'client',
     target: 'arm',
     payload: 'POST /versions/ver_16/activate',
     payloadKind: 'request',
-    reason: 'The customer selects an exact retained AppVersion by ID. The CLI can also resolve --previous to the latest successful different version before calling this action.',
+    reason: 'The customer names an exact retained AppVersion. `builder app version activate --previous` resolves the latest successful different version first and calls the same action. Activation never resolves source or builds.',
     result: '202 Accepted + Azure-AsyncOperation URL',
     api: 'builder app version activate shop ver_16 --request-id activate-842',
     executionSurface: 'armApi',
@@ -931,12 +935,12 @@ const activateSteps: FlowStep[] = [
   step({
     id: 'activate-reserve-app',
     phase: 'pending',
-    title: 'Reserve the Builder App for version activation',
+    title: 'Reserve the Builder App for this activation',
     source: 'regional',
     target: 'app',
     payload: 'pendingDeploymentId: adp_activate',
     payloadKind: 'resource',
-    reason: 'Activation uses the same admission slot as Deploy, Redeploy, and post-deployment cleanup.',
+    reason: 'Activation uses the same one-Deployment-at-a-time admission slot as deploy, redeploy, and post-deployment cleanup.',
     result: 'BuilderApp.pendingDeploymentId = adp_activate',
     api: 'ActivateVersionAsync -> AdmitAsync -> TryAdmitDeploymentAsync',
   }),
@@ -955,13 +959,13 @@ const activateSteps: FlowStep[] = [
   step({
     id: 'activate-create-deployment',
     phase: 'pending',
-    title: 'Persist a Pending activation operation',
+    title: 'Create an activate Deployment for the selected version',
     source: 'version',
     target: 'deployment',
     payload: 'ver_16 + frozen AppVersion configuration',
     payloadKind: 'resource',
-    reason: 'Every activation creates a new Deployment. Its action is Activate and its configuration is copied from the selected AppVersion, not from current desired app settings.',
-    result: 'Operation adp_activate: pending; action: activate; appVersionId: ver_16',
+    reason: 'Activation still creates a Deployment, the same rollout record deploy uses. Its action is activate and its configuration is copied from the selected AppVersion, not from current desired app settings.',
+    result: 'Deployment adp_activate: pending; action: activate; appVersionId: ver_16',
     api: 'IBuilderAppDeploymentRepository.CreateAsync(status = Pending, action = Activate)',
   }),
   step({
@@ -972,8 +976,8 @@ const activateSteps: FlowStep[] = [
     target: 'version',
     payload: 'record predecessor + validate retained outputs',
     payloadKind: 'resource',
-    reason: 'The worker rechecks retention and output availability, records the predecessor, passes through its durable Building checkpoint without building, and persists the runtime plan as Provisioning.',
-    result: 'Operation adp_activate: provisioning; no source resolution or build operation created',
+    reason: 'The worker rechecks retention and output availability, records the predecessor, passes through its durable Building checkpoint without building (the CLI shows Build as reused), and persists the runtime plan as Provisioning.',
+    result: 'Deployment adp_activate: provisioning; no source resolution or build operation created',
     api: 'DriveOwnedAsync -> BuildPlan -> status = Provisioning',
   }),
   ...retainedRuntimeSteps('activate', 'adp_activate', 'ver_16', 'v16'),
@@ -1089,10 +1093,13 @@ const scaleSteps: FlowStep[] = [
 export const scenarios: Scenario[] = [
   {
     id: 'manual',
-    kind: 'deploy',
+    kind: 'deployment',
+    action: 'deploy',
+    command: { surface: 'cli', text: 'builder app deploy <name>' },
+    outcome: 'New Deployment (action: deploy) · builds v1',
     label: 'First deploy',
-    title: 'Build and activate version 1',
-    summary: 'Regional reserves the app, resolves source, creates AppVersion v1, then persists a Building operation. Runtime provisioning begins only after the AppVersion is ready.',
+    title: 'Deploy main for the first time as v1',
+    summary: 'Regional reserves the app, resolves source, creates AppVersion v1, then creates a Building Deployment. Runtime provisioning begins only after the AppVersion is ready.',
     hasExistingRuntime: false,
     oldVersion: null,
     newVersion: 'v1',
@@ -1102,9 +1109,12 @@ export const scenarios: Scenario[] = [
   },
   {
     id: 'latest',
-    kind: 'deploy',
+    kind: 'deployment',
+    action: 'deploy',
+    command: { surface: 'cli', text: 'builder app deploy <name>' },
+    outcome: 'New Deployment (action: deploy) · builds v17',
     label: 'Deploy latest',
-    title: 'Build the latest source revision and replace v16',
+    title: 'Deploy the latest commit on main as v17',
     summary: 'This is not a configuration update. The ARM deploy action resolves the current configured branch head, builds a new AppVersion, and keeps v16 live until v17 passes health and YARP switches.',
     hasExistingRuntime: true,
     oldVersion: 'v16',
@@ -1114,9 +1124,12 @@ export const scenarios: Scenario[] = [
   },
   {
     id: 'commit',
-    kind: 'deploy',
+    kind: 'deployment',
+    action: 'deploy',
+    command: { surface: 'cli', text: 'builder app deploy <name> --commit 71ab42d…' },
+    outcome: 'New Deployment (action: deploy) · reuses matching v18',
     label: 'Deploy commit',
-    title: 'Deploy exact commit 71ab42d with current desired configuration',
+    title: 'Deploy exact commit 71ab42d with the current version config',
     summary: 'Regional revalidates source access, then reuses an exact retained AppVersion only when lifecycle, source, root, commit, complete desired configuration, and output availability all match. Otherwise it builds a new version from that SHA.',
     hasExistingRuntime: true,
     oldVersion: 'v17',
@@ -1125,22 +1138,13 @@ export const scenarios: Scenario[] = [
     steps: commitSteps,
   },
   {
-    id: 'redeploy',
-    kind: 'deploy',
-    label: 'Redeploy',
-    title: 'Re-provision retained version v17',
-    summary: 'No GitHub call and no build. A ready AppVersion creates a fresh provider and moves traffic with the same health gates.',
-    hasExistingRuntime: true,
-    oldVersion: 'v17-a',
-    newVersion: 'v17-b',
-    appVersionId: 'ver_17',
-    steps: redeploySteps,
-  },
-  {
     id: 'activate',
-    kind: 'deploy',
+    kind: 'deployment',
+    action: 'activate',
+    command: { surface: 'cli', text: 'builder app version activate <name> ver_16' },
+    outcome: 'New Deployment (action: activate) · reuses v16 · no build',
     label: 'Activate version',
-    title: 'Activate retained AppVersion v16 explicitly',
+    title: 'Activate built version v16 as a new Deployment',
     summary: 'The selected immutable AppVersion keeps its original source, manifest, outputs, and configuration. A new Deployment provisions fresh runtime resources without GitHub authorization or a build.',
     hasExistingRuntime: true,
     oldVersion: 'v18',
@@ -1149,8 +1153,26 @@ export const scenarios: Scenario[] = [
     steps: activateSteps,
   },
   {
+    id: 'redeploy',
+    kind: 'deployment',
+    action: 'redeploy',
+    command: { surface: 'arm', text: 'POST …/builderApps/<name>/redeploy' },
+    outcome: 'New Deployment (action: redeploy) · reuses active v17 · no CLI command',
+    label: 'Redeploy',
+    title: 'Redeploy active version v17 on a fresh runtime',
+    summary: 'ARM-only action with no Builder CLI command. No GitHub call and no build: the active AppVersion gets a fresh provider and moves traffic through the same health gates.',
+    hasExistingRuntime: true,
+    oldVersion: 'v17-a',
+    newVersion: 'v17-b',
+    appVersionId: 'ver_17',
+    steps: redeploySteps,
+  },
+  {
     id: 'config',
     kind: 'config',
+    action: null,
+    command: { surface: 'arm', text: 'PUT …/builderApps/<name> · versionConfiguration' },
+    outcome: 'No Deployment · waits for the next AppVersion · no CLI command yet',
     label: 'Change version config',
     title: 'Save API_URL for the next AppVersion',
     summary: 'Desired version configuration is saved on the Builder App. The running v16 keeps its frozen value; no AppVersion, Deployment, build, or provider call is created.',
@@ -1164,6 +1186,9 @@ export const scenarios: Scenario[] = [
   {
     id: 'scale',
     kind: 'scale',
+    action: null,
+    command: { surface: 'cli', text: 'builder app scale <name> --component api --min 2 --max 6 --cpu-percent 60' },
+    outcome: 'No Deployment · updates the running app in place',
     label: 'Change scaling',
     title: 'Apply 2-6 replicas to the running app',
     summary: 'Scaling is current Builder App policy. Embr saves it, then sends one complete PUT to the active Artifact App. No AppVersion, Deployment, build, or traffic switch.',
@@ -1179,6 +1204,25 @@ export const scenarios: Scenario[] = [
 export function getScenario(id: Scenario['id']): Scenario {
   return scenarios.find((scenario) => scenario.id === id) ?? scenarios[0]
 }
+
+const scenarioById = (id: Scenario['id']) => scenarios.find((scenario) => scenario.id === id)!
+
+// Grouped by what the command starts from: source (deploy), a built AppVersion (activate/redeploy), or a setting.
+export const scenarioGroups: { label: string; scenarios: Scenario[] }[] = [
+  { label: 'Deploy from source', scenarios: (['manual', 'latest', 'commit'] as const).map(scenarioById) },
+  { label: 'Reuse a built version', scenarios: (['activate', 'redeploy'] as const).map(scenarioById) },
+  { label: 'Change settings (no Deployment)', scenarios: (['config', 'scale'] as const).map(scenarioById) },
+]
+
+export function operationName(scenario: Scenario): string {
+  return scenario.action === 'activate'
+    ? 'Activation'
+    : scenario.action === 'redeploy'
+      ? 'Redeploy'
+      : scenario.action === 'deploy' ? 'Deployment' : 'Settings update'
+}
+
+export const completionLabel = (scenario: Scenario) => `${operationName(scenario)} completed`
 
 export function getCutoverState(
   scenario: Scenario,
@@ -1201,7 +1245,7 @@ const apiByNode: Record<NodeId, string> = {
   client: 'builder app deploy {name} [--commit <40-char SHA>]\nbuilder app version activate {name} <version-id|--previous>\nbuilder app scale {name} --component <name> --min <n> --max <n> --cpu-percent <n>\nGET {Azure-AsyncOperation}',
   arm: 'PUBLIC ARM API · Microsoft.Web protocol adapter\n\nPOST .../builderApps/{name}/deploy\nPOST .../builderApps/{name}/redeploy\nPOST .../builderApps/{name}/versions/{versionId}/activate\n  -> 202 + Azure-AsyncOperation + Retry-After\nPUT .../builderApps/{name} (versionConfiguration | scaling)\n  -> 200 OK; omitted properties are preserved\n\nValidates ARM caller + action payload + idempotency key\nCalls Regional through RegionalApiClient',
   regional: 'PRIVATE NON-ARM SERVICE API · ClusterIP only\nCaller: Embr.Arm.Api through RegionalApiClient\nAuth: ARM workload identity token + mTLS + service object-ID pin\n\nPOST /internal/regional/v1/builder-apps/deploy | redeploy | versions/activate\n  -> TriggerAsync | TriggerRedeployAsync | ActivateVersionAsync\n  -> admit, resolve/select AppVersion, persist + signal\n\nBackground dispatcher/reconciler\n  -> AppDeploymentService.ResumeAsync (claim + execute)\n  -> AppPostDeploymentCleanupReconciler (claim app admission + retry cleanup)',
-  deployment: 'IBuilderAppDeploymentRepository.CreateAsync\nTryClaimExecutionAsync\nTryClaimPostDeploymentCleanupAsync\nUpdateWithRetryAsync\nReleaseDeploymentAsync',
+  deployment: 'One Deployment per deploy, redeploy, or version activation\naction: deploy | redeploy | activate (what started it)\nstatus: pending -> building -> provisioning -> healthChecking -> activating -> succeeded\n  activating = routing traffic; it is not the activate action\n\nIBuilderAppDeploymentRepository.CreateAsync\nTryClaimExecutionAsync\nTryClaimPostDeploymentCleanupAsync\nUpdateWithRetryAsync\nReleaseDeploymentAsync',
   app: 'PUT | GET | PATCH | DELETE .../Microsoft.Web/builderApps/{name}\nversionConfiguration: desired; frozen into the next AppVersion; values are write-only\nscaling: current policy; saved and applied to the active Artifact App; never frozen\nSource attach: authorizationToken or transient repositoryToken; same-source updates may omit both\nDeploy always revalidates persisted source authorization\nTryAdmitDeploymentAsync | TryAdmitPostDeploymentCleanupAsync',
   github: 'CreateInstallationToken\nGetBranchShaAsync\nGetFileContentAsync\nGetCloneUrlAsync',
   manifest: 'GET /repos/{owner}/{repo}/contents/builder.yaml?ref={sha}\nAppManifestDeserializer.Parse + Validate',
@@ -1237,7 +1281,7 @@ export function getNodeExample(
       ? 'adp_latest'
       : `adp_${scenario.id}`
   const versionId = scenario.appVersionId
-  const settingsUpdate = scenario.kind !== 'deploy'
+  const settingsUpdate = scenario.kind !== 'deployment'
   const retainedVersion = settingsUpdate || scenario.id === 'commit' || scenario.id === 'redeploy' || scenario.id === 'activate'
   const versionCreated = retainedVersion || completedIds.has('create-version')
   const deploymentCreated = completedIds.has('create-deployment')

@@ -76,15 +76,17 @@ not live telemetry or controls that mutate the stamp.
 
 ### Verification Results
 
-- 85 Vitest tests pass, covering both configuration lifecycles, every deploy journey,
-  the settings scenarios in both views, playback, and Technical map fit.
+- 95 Vitest tests pass, covering commands and Deployment actions, the shared CLI timeline,
+  both configuration lifecycles, every deploy journey, settings scenarios in both views,
+  playback, and Technical map fit.
 - TypeScript/Vite production build and Oxlint pass.
 - Playwright verified all seven scenarios, health-before-traffic ordering, release
   success before cleanup, view switching, keyboard stage navigation, and pause.
 - No clipped content or horizontal overflow at 390, 1024, 1280, 1366, and 1440px;
-  1280x720, 1366x768, and 1440x900 fit without vertical scrolling.
-- Reduced motion hides payloads and stops line motion. Axe reports no violations in the
-  Overview for first deploy, activation, version-config, and scaling scenarios.
+  1280x720, 1366x768, and 1440x900 fit without vertical scrolling. Every command is fully
+  visible at 1280 and 1366px.
+- Reduced motion hides payloads and stops line motion. Axe reports no violations in 16
+  Overview states at 390 and 1366px, including rollout, cleanup, activation, and settings.
 
 ## Rollout Plan
 
@@ -151,5 +153,38 @@ Inspected Embr main at `e1676dea9f54aae74ad24d8dbe562e86cc8ed218`:
   also calls `AppScalingService.ApplyAsync`, which uses `ArtifactAppRuntimeProvider.ApplyScalingAsync`.
 - ARM `PUT .../builderApps/{name}` carries both settings and returns 200; `PATCH` covers only
   identity and source. `builder app scale` sends that `PUT`.
+
+</details>
+
+## Deploy, Activate, and Redeploy
+
+Deploy and activation both roll out a new Deployment, so the demo names each flow by the command
+that starts it and the Deployment `action` it records, the same way the Builder CLI does:
+
+- Deploy from source: `builder app deploy <name> [--commit <sha>]` resolves source with the
+  current version config and builds a new AppVersion unless an exact match exists.
+- Reuse a built version: `builder app version activate <name> <version-id>|--previous` reuses an
+  AppVersion with its own frozen config. ARM-only `POST .../redeploy` reuses the active version.
+- Change settings: version config and scaling create no Deployment.
+
+Every Deployment uses the CLI timeline phases Queue, Build, Provision, Verify, Route, and Cleanup.
+Overview groups its stages under those phases; activation and redeploy mark Build as reused, as the
+CLI does. Completion uses the CLI receipts: Deployment completed or Activation completed. The API
+status `activating` means routing traffic in every Deployment, so the demo labels it Routing and
+reserves "activate" for the version activation command.
+
+<details>
+<summary>CLI provenance</summary>
+
+Inspected `src/Embr.Builder.Cli` at Embr main `e1676dea9f54aae74ad24d8dbe562e86cc8ed218`:
+
+- `commands/apps.ts`: `app deploy` with `--commit`, and `app scale` "without creating an app version".
+- `commands/app.ts`: `app version activate`, "Activate an immutable app version as a new
+  deployment", with `[version-id]` or `--previous`.
+- `deployment-progress.ts`: timeline phases Queue, Build, Provision, Verify, Route, and Cleanup;
+  headers `BUILDER / DEPLOYMENT` and `BUILDER / ACTIVATION`; activation shows Build as `reused`,
+  labels its version "Reused version", and completes as "Activation completed".
+- No CLI command calls `/redeploy`; `AppDeploymentAction` defines `deploy`, `redeploy`, and
+  `activate` Deployment actions.
 
 </details>

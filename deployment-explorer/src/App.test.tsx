@@ -28,7 +28,7 @@ describe('Deployment Overview', () => {
     expect(screen.getByRole('tab', { name: 'Overview' })).toHaveAttribute('aria-selected', 'true')
     expect(screen.queryByRole('tablist', { name: 'Explorer story' })).not.toBeInTheDocument()
     expect(screen.queryByRole('tab', { name: 'Configuration' })).not.toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Freeze code and config into v1.' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Deploy starts from source: create v1.' })).toBeInTheDocument()
     expect(chip('Version configuration')).toHaveTextContent('API_URL = api.contoso.com')
     expect(chip('Version configuration')).toHaveTextContent('Frozen into each new AppVersion')
     expect(chip('Scaling policy')).toHaveTextContent('1–3 replicas · CPU 70%')
@@ -40,8 +40,8 @@ describe('Deployment Overview', () => {
     expect(screen.getByRole('group', { name: 'No live Artifact App yet' })).toBeInTheDocument()
     expect(screen.getByRole('group', { name: 'Customers: no app yet' })).toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: /Go to stage/ })).toHaveLength(9)
-    expect(screen.getByRole('button', { name: 'Go to stage 1: Pin' })).toHaveAttribute('aria-current', 'step')
-    expect(screen.getByRole('combobox', { name: 'Scenario' }).querySelectorAll('optgroup')).toHaveLength(2)
+    expect(screen.getByRole('button', { name: 'Go to stage 1: Create v1' })).toHaveAttribute('aria-current', 'step')
+    expect(screen.getByRole('combobox', { name: 'Scenario' }).querySelectorAll('optgroup')).toHaveLength(3)
     expect(container.textContent).not.toMatch(/CURRENCY|RELEASE_CHANNEL|EUR|USD/)
     expect(screen.queryByRole('button', { name: 'Inspect ARM API' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Previous stage' })).toBeDisabled()
@@ -66,7 +66,7 @@ describe('Deployment Overview', () => {
     expect(container.querySelector('.ov-canvas')).toHaveAttribute('data-route-target', 'live')
   })
 
-  it.each(scenarios.filter((item) => item.kind === 'deploy'))('moves $label traffic only after health and retires the old app last', (scenario) => {
+  it.each(scenarios.filter((item) => item.kind === 'deployment'))('moves $label traffic only after health and retires the old app last', (scenario) => {
     const { container } = render(<App />)
     selectScenario(scenario.id)
     const milestones = getOverviewMilestones(scenario)
@@ -102,7 +102,7 @@ describe('Deployment Overview', () => {
     expect(path(container, 'drop-version')).toHaveClass('state-unused')
     expect(container.querySelector('[data-node="source"]')).toHaveClass('state-skipped')
     expect(container.querySelector('[data-node="build"]')).toHaveClass('state-skipped')
-    fireEvent.click(screen.getByRole('button', { name: 'Go to stage 5: Health' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Go to stage 5: Health check' }))
     expect(slot(container, 'new')).toHaveTextContent('v16')
     expect(slot(container, 'new')).toHaveTextContent('legacy.contoso.com')
     expect(slot(container, 'new')).toHaveTextContent('1–3')
@@ -111,7 +111,49 @@ describe('Deployment Overview', () => {
     selectScenario('commit')
     expect(chip('Version configuration')).not.toHaveClass('state-unused')
     expect(path(container, 'drop-version')).toHaveTextContent('must match')
-    expect(screen.getByRole('button', { name: 'Go to stage 1: Match' })).toHaveAttribute('aria-current', 'step')
+    expect(screen.getByRole('button', { name: 'Go to stage 1: Match v18' })).toHaveAttribute('aria-current', 'step')
+  })
+
+  it('names each scenario by the command customers run and the Deployment it creates', () => {
+    render(<App />)
+    const command = () => screen.getByRole('group', { name: 'Command' })
+    const phases = () => screen.getAllByRole('list').filter((list) => list.parentElement?.classList.contains('stage-phase')).map((list) => list.getAttribute('aria-labelledby'))
+    const phaseStages = (phase: string) => [...screen.getByRole('list', { name: phase }).querySelectorAll('button')].map((button) => button.getAttribute('aria-label'))
+    expect(command()).toHaveTextContent('CLIbuilder app deploy <name>')
+    expect(command()).toHaveTextContent('New Deployment (action: deploy) · builds v1')
+    expect(screen.getByRole('list', { name: 'Deployment timeline' })).toBeInTheDocument()
+    expect(phases()).toEqual(['stage-phase-queue', 'stage-phase-build', 'stage-phase-provision', 'stage-phase-verify', 'stage-phase-route', 'stage-phase-cleanup'])
+    expect(phaseStages('Build')).toEqual(['Go to stage 2: Build', 'Go to stage 3: Package'])
+
+    selectScenario('activate')
+    expect(command()).toHaveTextContent('CLIbuilder app version activate <name> ver_16')
+    expect(command()).toHaveTextContent('New Deployment (action: activate) · reuses v16 · no build')
+    expect(screen.getByRole('list', { name: 'Activation timeline' })).toBeInTheDocument()
+    expect(phases()).toEqual(['stage-phase-queue', 'stage-phase-build', 'stage-phase-provision', 'stage-phase-verify', 'stage-phase-route', 'stage-phase-cleanup'])
+    expect(phaseStages('Build')).toEqual(['Go to stage 2: Reused'])
+    expect(screen.getByRole('heading', { name: 'Activate starts from a built version, v16.' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Go to stage 8: Clean up' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Next stage' }))
+    expect(screen.getByRole('heading', { name: 'Activation completed. v16 is live again.' })).toBeInTheDocument()
+
+    selectScenario('redeploy')
+    expect(command()).toHaveTextContent('ARMPOST …/builderApps/<name>/redeploy')
+    expect(command()).toHaveTextContent('no CLI command')
+    expect(screen.getByRole('list', { name: 'Redeploy timeline' })).toBeInTheDocument()
+
+    selectScenario('scale')
+    expect(command()).toHaveTextContent('CLIbuilder app scale <name> --component api --min 2 --max 6 --cpu-percent 60')
+    expect(command()).toHaveTextContent('No Deployment')
+    expect(screen.getByRole('list', { name: 'Settings update timeline' })).toBeInTheDocument()
+    expect(phases()).toEqual(['stage-phase-update'])
+    expect(screen.getByText('Resource update · no Deployment')).toBeInTheDocument()
+
+    const groups = [...screen.getByRole('combobox', { name: 'Scenario' }).querySelectorAll('optgroup')].map((group) => [group.label, [...group.querySelectorAll('option')].map((option) => option.textContent)])
+    expect(groups).toEqual([
+      ['Deploy from source', ['First deploy', 'Deploy latest', 'Deploy commit']],
+      ['Reuse a built version', ['Activate version', 'Redeploy']],
+      ['Change settings (no Deployment)', ['Change version config', 'Change scaling']],
+    ])
   })
 
   it('saves version config for the next version without touching the running app', () => {
@@ -120,7 +162,7 @@ describe('Deployment Overview', () => {
     expect(screen.getAllByRole('button', { name: /Go to stage/ })).toHaveLength(1)
     expect(chip('Version configuration')).toHaveTextContent('API_URL = legacy.contoso.com')
     fireEvent.click(screen.getByRole('button', { name: 'Next stage' }))
-    expect(screen.getByRole('heading', { name: 'Saved for the next version.' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Saved for the next deploy.' })).toBeInTheDocument()
     expect(chip('Version configuration')).toHaveTextContent('API_URL = api.contoso.com')
     expect(chip('Version configuration')).toHaveTextContent('Saved · was legacy.contoso.com')
     expect(container.querySelector('.ov-version-card')).toHaveTextContent('next')
@@ -198,11 +240,11 @@ describe('Deployment Overview', () => {
     expect(screen.getByRole('button', { name: 'Next stage' })).toBeDisabled()
     fireEvent.click(screen.getByRole('button', { name: 'Pause' }))
     act(() => vi.advanceTimersByTime(10000))
-    expect(screen.getByRole('button', { name: 'Go to stage 1: Pin' })).toHaveAttribute('aria-current', 'step')
+    expect(screen.getByRole('button', { name: 'Go to stage 1: Create v1' })).toHaveAttribute('aria-current', 'step')
     expect(screen.getByRole('button', { name: 'Next stage' })).toBeEnabled()
   })
 
-  it.each([{ id: 'manual', title: 'v1 is live.' }, { id: 'scale', title: 'v17 now scales 2–6.' }])('plays every $id stage and stops automatically', ({ id, title }) => {
+  it.each([{ id: 'manual', title: 'Deployment completed. v1 is live.' }, { id: 'scale', title: 'v17 now scales 2–6.' }])('plays every $id stage and stops automatically', ({ id, title }) => {
     vi.useFakeTimers()
     render(<App />)
     selectScenario(id)
@@ -222,12 +264,12 @@ describe('Deployment Overview', () => {
     act(() => vi.advanceTimersByTime(200))
     selectScenario('redeploy')
     act(() => vi.advanceTimersByTime(10000))
-    expect(screen.getByRole('button', { name: 'Go to stage 1: Select' })).toHaveAttribute('aria-current', 'step')
+    expect(screen.getByRole('button', { name: 'Go to stage 1: Pick v17' })).toHaveAttribute('aria-current', 'step')
     fireEvent.click(screen.getByRole('button', { name: 'Run flow' }))
     act(() => vi.advanceTimersByTime(200))
     fireEvent.click(screen.getByRole('tab', { name: 'Technical' }))
     act(() => vi.advanceTimersByTime(10000))
-    expect(screen.getByRole('heading', { name: 'Request a retained-version redeploy' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Request a redeploy of the active version' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Run flow' })).toBeEnabled()
   })
 
@@ -243,7 +285,7 @@ describe('Deployment Overview', () => {
     expect(overviewTab).toHaveAttribute('aria-selected', 'true')
     selectScenario('activate')
     expect(screen.getByRole('combobox', { name: 'Scenario' })).toHaveValue('activate')
-    expect(screen.getByRole('button', { name: 'Go to stage 1: Select' })).toHaveAttribute('aria-current', 'step')
+    expect(screen.getByRole('button', { name: 'Go to stage 1: Pick v16' })).toHaveAttribute('aria-current', 'step')
   })
 
   it('opens old configuration links as the single Overview or the Technical flow', () => {
@@ -328,7 +370,7 @@ describe('Deployment Explorer', () => {
     expect(screen.getByText('versionConfiguration: API_URL=api.contoso.com')).toBeInTheDocument()
     expect(screen.getByText('scaling: api 1–3 replicas · CPU 70%')).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: 'First deploy' })).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByRole('button', { name: 'Inspect Deployment operation' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Inspect Deployment' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Inspect No active provider' })).toBeInTheDocument()
     expect(screen.getByText('POST /deploy + request ID')).toBeInTheDocument()
     expect(screen.getByText('202 Accepted + Azure-AsyncOperation URL')).toBeInTheDocument()
@@ -409,7 +451,7 @@ describe('Deployment Explorer', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'Redeploy' }))
 
-    expect(screen.getByRole('heading', { name: 'Request a retained-version redeploy' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Request a redeploy of the active version' })).toBeInTheDocument()
     expect(screen.queryByText('Resolve main to an exact commit')).not.toBeInTheDocument()
     expect(screen.getByText('Select a reusable ready AppVersion')).toBeInTheDocument()
     expect(screen.queryByRole('tab', { name: 'Rollback' })).not.toBeInTheDocument()
@@ -427,17 +469,19 @@ describe('Deployment Explorer', () => {
     expect(screen.getByText(/same lifecycle, source identity, root directory, commit/)).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('tab', { name: 'Activate version' }))
-    expect(screen.getByRole('heading', { name: 'Request one frozen AppVersion explicitly' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Activate one built AppVersion by ID' })).toBeInTheDocument()
+    expect(screen.getByText('builder app version activate <name> ver_16', { selector: '.scenario-command' })).toBeInTheDocument()
+    expect(screen.getByText('Activation sequence')).toBeInTheDocument()
     expect(screen.getByText('Validate the selected retained AppVersion')).toBeInTheDocument()
     expect(screen.queryByText('Revalidate the persisted GitHub source authorization')).not.toBeInTheDocument()
 
     const scenario = getScenario('activate')
     const prepareIndex = scenario.steps.findIndex((step) => step.id === 'activate-prepare')
     fireEvent.click(screen.getByRole('button', { name: `Go to step ${prepareIndex + 1}: Prepare the retained version for fresh runtime resources` }))
-    expect(screen.getByRole('button', { name: 'Inspect Deployment operation' })).toHaveTextContent('Pending')
+    expect(screen.getByRole('button', { name: 'Inspect Deployment' })).toHaveTextContent('Pending')
 
     fireEvent.click(screen.getByRole('button', { name: 'Next step' }))
-    expect(screen.getByRole('button', { name: 'Inspect Deployment operation' })).toHaveTextContent('Provisioning')
+    expect(screen.getByRole('button', { name: 'Inspect Deployment' })).toHaveTextContent('Provisioning')
   })
 
   it('creates or switches one YARP backend route after the candidate passes health', () => {
@@ -487,18 +531,18 @@ describe('Deployment Explorer', () => {
     expect(screen.getByRole('heading', { name: 'Send the new scaling policy through ARM' })).toBeInTheDocument()
     expect(screen.getByText('Settings update sequence')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Inspect No candidate' })).toHaveTextContent('Not needed')
-    expect(screen.getByRole('button', { name: 'Inspect Deployment operation' })).toHaveTextContent('Not needed')
+    expect(screen.getByRole('button', { name: 'Inspect Deployment' })).toHaveTextContent('Not needed')
     const steps = getScenario('scale').steps
     fireEvent.click(screen.getByRole('button', { name: `Go to step ${steps.length}: Update the running Artifact App in place` }))
     expect(screen.getByText(/replaces only the scale block/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Next step' }))
-    expect(screen.getByRole('heading', { name: 'Settings update complete' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Settings update completed' })).toBeInTheDocument()
     expect(container.querySelector('.traffic-routing')).toHaveAttribute('data-route-target', 'existing')
     fireEvent.click(screen.getByRole('button', { name: 'Inspect Running Artifact App' }))
     const running = JSON.parse(container.querySelector('.detail-code code')!.textContent!)
     expect(running.scale).toMatchObject({ minReplicas: 2, maxReplicas: 6 })
     expect(running.configuration.env).toEqual([{ name: 'API_URL', secretRef: 'env-0' }])
-    expect(screen.getByText('Settings update complete', { selector: 'dd' })).toBeInTheDocument()
+    expect(screen.getByText('Settings update completed', { selector: 'dd' })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('tab', { name: 'Change version config' }))
     expect(screen.getByRole('heading', { name: 'Save a new desired API_URL through ARM' })).toBeInTheDocument()

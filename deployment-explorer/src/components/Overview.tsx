@@ -16,9 +16,9 @@ import {
   Users,
   type LucideIcon,
 } from 'lucide-react'
-import { type Scenario } from '../model'
+import { operationName, type Scenario } from '../model'
 import { formatScaling, getConfigurationState, type ScalingPolicy } from '../configuration'
-import { getOverviewState, type OverviewMilestoneId } from '../overview'
+import { getOverviewState, timelinePhaseLabels, type OverviewMilestone, type OverviewMilestoneId, type TimelinePhase } from '../overview'
 import './Overview.css'
 
 const canvasWidth = 1180
@@ -83,7 +83,7 @@ export function Overview({ scenario, completedCount, isAnimating, motionDuration
   const [layout, setLayout] = useState<{ mode: 'canvas' | 'stacked'; scale: number }>({ mode: 'canvas', scale: 1 })
   const state = getOverviewState(scenario, completedCount)
   const settings = getConfigurationState(scenario, completedCount)
-  const deploy = scenario.kind === 'deploy'
+  const deploy = scenario.kind === 'deployment'
   const builds = state.milestones.some((milestone) => milestone.id === 'build')
   const sourceUsed = builds || scenario.id === 'commit'
   const current = state.complete ? null : state.milestone.id
@@ -195,12 +195,12 @@ export function Overview({ scenario, completedCount, isAnimating, motionDuration
       context: scenario.kind === 'config' ? 'next deploy captures it'
         : scenario.kind === 'scale' ? 'unchanged'
           : scenario.id === 'commit' ? 'commit + config matched'
-            : scenario.id === 'redeploy' ? 'active version, as is'
-              : scenario.id === 'activate' ? 'retained · own config' : 'commit + yaml + config',
+            : scenario.id === 'redeploy' ? 'reused · active version'
+              : scenario.id === 'activate' ? 'reused · own config' : 'commit + yaml + config',
     },
-    build: { name: 'ADC build sandbox', context: builds ? 'temporary · Embr-run' : deploy ? 'skipped' : 'not used' },
-    acr: { name: 'Embr ACR', context: builds ? 'OCI image registry' : 'retained image' },
-    blob: { name: 'Embr Blob', context: builds ? 'static files' : 'retained files' },
+    build: { name: 'ADC build sandbox', context: builds ? 'temporary · Embr-run' : deploy ? 'not needed · reused' : 'not used' },
+    acr: { name: 'Embr ACR', context: builds ? 'OCI image registry' : 'reused image' },
+    blob: { name: 'Embr Blob', context: builds ? 'static files' : 'reused files' },
     artifact: { name: 'ADC Artifact', context: 'imported image' },
     yarp: { name: 'Embr YARP', context: 'app URL · routing' },
     customers: {
@@ -268,6 +268,12 @@ export function Overview({ scenario, completedCount, isAnimating, motionDuration
 
   const stageCount = state.milestones.length
   const caption = state.complete ? state.completion : state.milestone
+  const phaseGroups = state.milestones.reduce<{ phase: TimelinePhase; milestones: { milestone: OverviewMilestone; index: number }[] }[]>((groups, milestone, index) => {
+    const last = groups.at(-1)
+    if (last?.phase === milestone.phase) last.milestones.push({ milestone, index })
+    else groups.push({ phase: milestone.phase, milestones: [{ milestone, index }] })
+    return groups
+  }, [])
 
   return (
     <div id="overview-panel" className="overview" role="tabpanel" aria-labelledby="overview-tab" data-kind={scenario.kind}>
@@ -279,19 +285,26 @@ export function Overview({ scenario, completedCount, isAnimating, motionDuration
         <button type="button" className="overview-detail-link" onClick={onTechnicalView}>Technical detail <ArrowRight size={16} aria-hidden="true" /></button>
       </div>
 
-      <ol className="stage-stepper" aria-label="Stages">
-        {state.milestones.map((milestone, index) => {
-          const done = completedCount >= milestone.end
-          const active = milestone.id === current
-          return (
-            <li key={milestone.id} className={done ? 'is-done' : active ? 'is-current' : undefined}>
-              <button type="button" aria-label={`Go to stage ${index + 1}: ${milestone.label}`} aria-current={active ? 'step' : undefined} onClick={() => onMilestoneSelect(milestone.start)}>
-                <span className="stage-dot" aria-hidden="true">{done ? <Check size={11} strokeWidth={3} /> : index + 1}</span>
-                <span>{milestone.label}</span>
-              </button>
-            </li>
-          )
-        })}
+      <ol className="stage-stepper" aria-label={`${operationName(scenario)} timeline`}>
+        {phaseGroups.map((group) => (
+          <li key={group.phase} className={`stage-phase phase-${group.phase}${group.milestones.some(({ milestone }) => milestone.id === current) ? ' is-current-phase' : ''}`} style={{ flexGrow: group.milestones.length }}>
+            <span className="stage-phase-label" id={`stage-phase-${group.phase}`}>{timelinePhaseLabels[group.phase]}</span>
+            <ol aria-labelledby={`stage-phase-${group.phase}`}>
+              {group.milestones.map(({ milestone, index }) => {
+                const done = completedCount >= milestone.end
+                const active = milestone.id === current
+                return (
+                  <li key={milestone.id} className={done ? 'is-done' : active ? 'is-current' : undefined}>
+                    <button type="button" aria-label={`Go to stage ${index + 1}: ${milestone.label}`} aria-current={active ? 'step' : undefined} onClick={() => onMilestoneSelect(milestone.start)}>
+                      <span className="stage-dot" aria-hidden="true">{done ? <Check size={11} strokeWidth={3} /> : index + 1}</span>
+                      <span>{milestone.label}</span>
+                    </button>
+                  </li>
+                )
+              })}
+            </ol>
+          </li>
+        ))}
       </ol>
 
       <div ref={frame} className="ov-frame" data-layout={layout.mode} style={layout.mode === 'canvas' ? { height: canvasHeight * layout.scale } : undefined}>
@@ -336,7 +349,7 @@ export function Overview({ scenario, completedCount, isAnimating, motionDuration
             </div>
           </section>
 
-          <span className="ov-lane-title lane-release" aria-hidden="true">Release</span>
+          <span className="ov-lane-title lane-release" aria-hidden="true">Pipeline</span>
           <span className="ov-lane-title lane-traffic" aria-hidden="true">Live traffic</span>
 
           {node('source', 'build')}

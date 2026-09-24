@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Braces, PlugZap, X } from 'lucide-react'
 import {
+  completionLabel,
   executionSurfaceLabels,
   getNodeApi,
   getNodeExample,
@@ -46,7 +47,7 @@ export function DetailDrawer({
 
       <dl className="detail-facts">
         <div><dt>Role</dt><dd>{node.eyebrow}</dd></div>
-        <div><dt>Flow state</dt><dd>{completedCount === scenario.steps.length ? scenario.kind === 'deploy' ? 'Deployment complete' : 'Settings update complete' : `${completedCount} of ${scenario.steps.length} steps complete`}</dd></div>
+        <div><dt>Flow state</dt><dd>{completedCount === scenario.steps.length ? completionLabel(scenario) : `${completedCount} of ${scenario.steps.length} steps complete`}</dd></div>
         <div><dt>Current step API</dt><dd>{currentStep ? executionSurfaceLabels[currentStep.executionSurface] : 'No active call'}</dd></div>
       </dl>
 

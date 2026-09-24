@@ -67,6 +67,6 @@ export function getConfigurationState(scenario: Scenario, completedCount: number
     previousScaling: scalingSaved ? baseScaling : null,
     liveScaling: scenario.kind === 'scale' && done.has('scale-apply') ? updatedScaling : baseScaling,
     liveHost: versionHost(scenario.oldVersion),
-    nextHost: scenario.kind === 'deploy' ? versionHost(scenario.newVersion) : null,
+    nextHost: scenario.kind === 'deployment' ? versionHost(scenario.newVersion) : null,
   }
 }

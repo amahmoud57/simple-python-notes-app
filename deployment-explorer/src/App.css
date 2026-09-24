@@ -78,6 +78,7 @@
 }
 .scenario-title { min-width: 0; }
 .scenario-title span { display: block; color: var(--green); font: 900 8px/1 var(--mono); text-transform: uppercase; }
+.scenario-title .scenario-command { display: block; overflow: hidden; color: var(--green); font: 700 10px/1.2 var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 .scenario-title strong { display: block; margin-top: 5px; overflow: hidden; color: var(--ink); text-overflow: ellipsis; white-space: nowrap; font: 700 17px/1 var(--display); }
 .playback-controls { gap: 6px; }
 .playback-controls button,

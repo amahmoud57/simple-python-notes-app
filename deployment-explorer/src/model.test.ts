@@ -1,18 +1,21 @@
 import { describe, expect, it } from 'vitest'
 import {
+  completionLabel,
   executionSurfaceLabels,
   getCutoverState,
   getNodeApi,
   getNodeExample,
   getScenario,
   nodes,
+  phaseLabels,
+  scenarioGroups,
   scenarios,
   type Scenario,
 } from './model'
 import { getOverviewMilestones, getOverviewState } from './overview'
 import { baseScaling, getConfigurationState, updatedScaling, versionHost } from './configuration'
 
-const deployScenarios = scenarios.filter((scenario) => scenario.kind === 'deploy')
+const deployScenarios = scenarios.filter((scenario) => scenario.kind === 'deployment')
 const countAfter = (scenario: Scenario, id: string) => scenario.steps.findIndex((step) => step.id === id) + 1
 const cpuScale = (min: number, max: number, cpu: number) => ({ minReplicas: min, maxReplicas: max, rules: [{ name: 'cpu', type: 'cpu', metadata: { type: 'Utilization', value: String(cpu) } }] })
 
@@ -97,6 +100,69 @@ describe('configuration lifecycles', () => {
   })
 })
 
+describe('deploy versus activate terminology', () => {
+  it('names every scenario by its command and the Deployment action it creates', () => {
+    const byId = Object.fromEntries(scenarios.map((scenario) => [scenario.id, scenario]))
+    expect(byId.manual).toMatchObject({ action: 'deploy', command: { surface: 'cli', text: 'builder app deploy <name>' } })
+    expect(byId.latest).toMatchObject({ action: 'deploy', command: { surface: 'cli', text: 'builder app deploy <name>' } })
+    expect(byId.commit).toMatchObject({ action: 'deploy', command: { surface: 'cli', text: 'builder app deploy <name> --commit 71ab42d…' } })
+    expect(byId.activate).toMatchObject({ action: 'activate', command: { surface: 'cli', text: 'builder app version activate <name> ver_16' } })
+    expect(byId.redeploy).toMatchObject({ action: 'redeploy', command: { surface: 'arm' } })
+    expect(byId.redeploy.outcome).toContain('no CLI command')
+    expect(byId.config).toMatchObject({ action: null, command: { surface: 'arm' } })
+    expect(byId.scale).toMatchObject({ action: null, command: { surface: 'cli', text: 'builder app scale <name> --component api --min 2 --max 6 --cpu-percent 60' } })
+    for (const scenario of scenarios) {
+      expect(scenario.outcome).toMatch(scenario.action ? new RegExp(`^New Deployment \\(action: ${scenario.action}\\)`) : /^No Deployment/)
+    }
+  })
+
+  it('groups scenarios by what they start from, with every scenario listed once', () => {
+    expect(scenarioGroups.map((group) => [group.label, group.scenarios.map((scenario) => scenario.id)])).toEqual([
+      ['Deploy from source', ['manual', 'latest', 'commit']],
+      ['Reuse a built version', ['activate', 'redeploy']],
+      ['Change settings (no Deployment)', ['config', 'scale']],
+    ])
+    expect(scenarioGroups.flatMap((group) => group.scenarios)).toEqual(scenarios)
+  })
+
+  it.each(deployScenarios)('places $id stages on the CLI Deployment timeline, marking reused builds', (scenario) => {
+    const milestones = getOverviewMilestones(scenario)
+    const phases = [...new Set(milestones.map((milestone) => milestone.phase))]
+    expect(phases).toEqual(['queue', 'build', 'provision', 'verify', 'route', 'cleanup'])
+    const build = milestones.filter((milestone) => milestone.phase === 'build').map((milestone) => milestone.label)
+    expect(build).toEqual(scenario.id === 'manual' || scenario.id === 'latest' ? ['Build', 'Package'] : ['Reused'])
+    expect(milestones.map((milestone) => milestone.label)).not.toContain('Verify')
+  })
+
+  it('completes each action with the CLI receipt wording', () => {
+    expect(scenarios.map((scenario) => [scenario.id, completionLabel(scenario)])).toEqual([
+      ['manual', 'Deployment completed'],
+      ['latest', 'Deployment completed'],
+      ['commit', 'Deployment completed'],
+      ['activate', 'Activation completed'],
+      ['redeploy', 'Redeploy completed'],
+      ['config', 'Settings update completed'],
+      ['scale', 'Settings update completed'],
+    ])
+    expect(getOverviewState(getScenario('activate'), getScenario('activate').steps.length).completion.title).toBe('Activation completed. v16 is live again.')
+  })
+
+  it('keeps activate out of deploy wording and routing out of activate wording', () => {
+    expect(phaseLabels.activating).toBe('Routing')
+    expect(nodes.find((node) => node.id === 'deployment')).toMatchObject({ label: 'Deployment', eyebrow: 'Rollout record' })
+    expect(getNodeApi('deployment')).toContain('activating = routing traffic; it is not the activate action')
+    for (const id of ['manual', 'latest', 'commit'] as const) {
+      const text = getScenario(id).steps.map((step) => `${step.title} ${step.reason} ${step.result}`).join(' ')
+      expect(text).not.toMatch(/\bActivation\b|\bactivate\b/)
+    }
+    for (const scenario of scenarios) {
+      if (scenario.action !== 'activate') expect(scenario.title).not.toMatch(/\bactivate\b/i)
+      for (const step of scenario.steps) expect(step.title).not.toMatch(/\boperation\b/i)
+    }
+    expect(getScenario('activate').title).not.toMatch(/\bbuild\b/i)
+  })
+})
+
 describe('deployment overview', () => {
   it.each(deployScenarios)('covers every $id step once with visible build, registry, runtime, and routing handoffs', (scenario) => {
     const milestones = getOverviewMilestones(scenario)
@@ -145,7 +211,7 @@ describe('deployment overview', () => {
       expect(getOverviewMilestones(getScenario(id)).some((milestone) => milestone.id === 'build')).toBe(true)
     }
     for (const id of ['commit', 'redeploy', 'activate'] as const) {
-      expect(getOverviewMilestones(getScenario(id))[1].label).toBe('Reuse')
+      expect(getOverviewMilestones(getScenario(id))[1].label).toBe('Reused')
     }
     const scenario = getScenario('latest')
     const afterRelease = getOverviewState(scenario, getOverviewMilestones(scenario).find((milestone) => milestone.id === 'verify')!.end)
@@ -172,7 +238,7 @@ describe('deployment overview', () => {
     expect(scale.map((milestone) => milestone.id)).toEqual(['save', 'apply'])
     expect(scale[0].end).toBe(countAfter(getScenario('scale'), 'scale-persist'))
     expect(getOverviewState(getScenario('scale'), 0).released).toBe(false)
-    expect(getOverviewState(getScenario('config'), 3).completion.title).toBe('Saved for the next version.')
+    expect(getOverviewState(getScenario('config'), 3).completion.title).toBe('Saved for the next deploy.')
   })
 })
 
@@ -409,10 +475,10 @@ describe('deployment model', () => {
   })
 
   it('distinguishes the durable operation from runtime deployment', () => {
-    expect(nodes.find((node) => node.id === 'deployment')?.label).toBe('Deployment operation')
+    expect(nodes.find((node) => node.id === 'deployment')?.label).toBe('Deployment')
 
     const operationStep = getScenario('manual').steps.find((step) => step.id === 'create-deployment')
-    expect(operationStep?.title).toBe('Persist the operation for the new AppVersion')
+    expect(operationStep?.title).toBe('Create the Deployment for the new AppVersion')
     expect(operationStep?.source).toBe('version')
     expect(operationStep?.reason).toContain('The AppVersion now exists')
     expect(operationStep?.reason).toContain('immutable version configuration')
