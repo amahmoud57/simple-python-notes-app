@@ -1,6 +1,8 @@
 import {
   artifactAppScale,
   baseScaling,
+  configVariable,
+  formatScaling,
   getConfigurationState,
   scalingDocument,
   updatedScaling,
@@ -214,7 +216,7 @@ const sourceBuildSteps = (
     payload: 'builder.yaml @ 9f42c1e',
     payloadKind: 'file',
     reason: 'Regional downloads builder.yaml at that exact commit, validates components, routes, outputs, and health paths, then checks that desired component configuration names exist in the manifest.',
-    result: 'Manifest accepted: web static component + API compute component',
+    result: 'Manifest accepted: static web at / + runtime api at /api',
     api: 'GET /repos/contoso/shop/contents/builder.yaml?ref=9f42c1e...',
     executionSurface: 'nonArmApi',
   }),
@@ -1264,6 +1266,45 @@ export function getNodeApi(id: NodeId): string {
   return apiByNode[id]
 }
 
+// Mirrors main's AppManifest; builder.yaml has no other top-level keys.
+const demoManifest = {
+  name: 'shop',
+  components: [
+    { name: 'web', role: 'static', rootDirectory: 'frontend', platform: 'nodejs', platformVersion: '22', build: 'npm run build', output: 'dist', path: '/' },
+    { name: 'api', role: 'web', rootDirectory: 'backend', platform: 'python', platformVersion: '3.12', path: '/api', run: { port: 8000, start: 'gunicorn --bind 0.0.0.0:8000 app:app', healthCheckPath: '/api/health' } },
+  ],
+}
+
+const manifestYaml = (apiHost: string, scaling: string) => `# Top level holds only name and components.
+name: shop                      # optional; ARM name wins
+
+components:
+  # Static: files in Blob Storage, served by YARP
+  - name: web
+    role: static                # no server process
+    rootDirectory: frontend     # repo subfolder
+    platform: nodejs            # Vite default
+    platformVersion: "22"       # optional pin
+    build: npm run build        # Vite default
+    output: dist                # Vite default web root
+    path: /                     # catch-all route
+
+  # Runtime: image in ACR, runs as an ADC Artifact App
+  - name: api
+    role: web                   # web = runtime server
+    rootDirectory: backend
+    platform: python            # required for runtime
+    platformVersion: "3.12"
+    path: /api                  # requests under /api
+    run:
+      port: 8000                # default 8080
+      start: gunicorn --bind 0.0.0.0:8000 app:app
+      healthCheckPath: /api/health  # required, under /api
+
+# Not in builder.yaml; set on the Builder App:
+#   versionConfiguration  ${configVariable}=https://${apiHost}
+#   scaling               api ${scaling}`
+
 function json(value: unknown): string {
   return JSON.stringify(value, null, 2)
 }
@@ -1419,7 +1460,7 @@ export function getNodeExample(
     case 'github':
       return { title: 'GitHub source identity', format: 'JSON', body: json({ provider: 'github', id: '1211637325', displayName: 'amahmoud57/simple-python-notes-app', reference: 'demo/builder-deployment-explorer', revision: sourceRevision ?? '9f42c1e4a77b81f6d49d3c2a...' }) }
     case 'manifest':
-      return { title: 'builder.yaml', format: 'YAML', body: 'components:\n  - name: web\n    rootDirectory: frontend\n    path: /\n  - name: api\n    rootDirectory: backend\n    path: /api\n    run:\n      healthCheckPath: /health\n\n# web produces static output\n# api produces compute output' }
+      return { title: 'builder.yaml', format: 'YAML', body: manifestYaml(settings.desiredHost, formatScaling(settings.scaling)) }
     case 'version':
       if (!versionCreated) return { title: 'AppVersion before creation', format: 'JSON', body: json({ id: versionId, state: 'not created yet', waitingFor: ['exact GitHub revision', 'validated builder.yaml'] }) }
       return {
@@ -1431,7 +1472,7 @@ export function getNodeExample(
           appLifecycleId: 'ali_31',
           requestedSourceRevision: sourceRevision,
           source: { provider: 'github', id: '1211637325', reference: 'demo/builder-deployment-explorer', revision: sourceRevision ?? '9f42c1e4a77...' },
-          manifest: { file: 'builder.yaml', components: [{ name: 'web', type: 'static', path: '/' }, { name: 'api', type: 'compute', path: '/api' }] },
+          manifest: demoManifest,
           configuration: frozenConfiguration,
           build: {
             status: versionReady ? 'ready' : versionBuilding ? 'building' : 'pending',

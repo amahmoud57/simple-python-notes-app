@@ -421,7 +421,7 @@ describe('deployment model', () => {
     expect(getNodeExample('version', scenario, createIndex, 'empty').body).toContain('not created yet')
 
     const created = getNodeExample('version', scenario, createIndex + 1, 'empty').body
-    expect(created).toContain('builder.yaml')
+    expect(JSON.parse(created).manifest.components.map((component: { name: string }) => component.name)).toEqual(['web', 'api'])
     expect(created).toContain('9f42c1e4a77')
     expect(created).toContain('"status": "pending"')
 
@@ -432,6 +432,45 @@ describe('deployment model', () => {
     expect(ready).toContain('"status": "ready"')
     expect(ready).toContain('static-assets/app_shop/ver_demo/web/site')
     expect(ready).toContain('@sha256:71ab42d9c508')
+  })
+
+  it('shows a complete builder.yaml with one static and one runtime component, snapshotted on the AppVersion', () => {
+    const scenario = getScenario('manual')
+    const fields = getNodeExample('manifest', scenario, 0, 'empty').body
+      .split('\n')
+      .map((line) => line.replace(/\s+#.*$/, ''))
+      .filter((line) => line.trim() && !line.trimStart().startsWith('#'))
+    const hasField = (key: string, value: unknown) => {
+      const scalar = typeof value === 'string' && /^\d/.test(value) ? `"${value}"` : String(value)
+      return fields.some((line) => line.trim().replace(/^- /, '') === `${key}: ${scalar}`)
+    }
+
+    expect(fields.filter((line) => /^\S/.test(line)).map((line) => line.split(':')[0])).toEqual(['name', 'components'])
+
+    const created = scenario.steps.findIndex((step) => step.id === 'create-version') + 1
+    const { manifest } = JSON.parse(getNodeExample('version', scenario, created, 'empty').body)
+    const [web, api] = manifest.components
+    expect(web).toMatchObject({ role: 'static', platform: 'nodejs', output: 'dist', path: '/' })
+    expect(web.run).toBeUndefined()
+    expect(api).toMatchObject({ role: 'web', platform: 'python', path: '/api', run: { port: 8000, healthCheckPath: '/api/health' } })
+    expect(api.output).toBeUndefined()
+    expect(api.run.healthCheckPath.startsWith(`${api.path}/`)).toBe(true)
+
+    expect(hasField('name', manifest.name)).toBe(true)
+    for (const { run, ...component } of manifest.components) {
+      for (const [key, value] of Object.entries({ ...component, ...run })) expect(hasField(key, value), key).toBe(true)
+    }
+  })
+
+  it('keeps version config and scaling on the Builder App, outside builder.yaml', () => {
+    const scale = getScenario('scale')
+    const before = getNodeExample('manifest', scale, 0, 'active').body
+    const after = getNodeExample('manifest', scale, scale.steps.length, 'active').body
+
+    expect(before).toContain('# Not in builder.yaml; set on the Builder App:')
+    expect(before).toContain('versionConfiguration  API_URL=https://api.contoso.com')
+    expect(before).toContain('scaling               api 1–3 replicas · CPU 70%')
+    expect(after).toContain('scaling               api 2–6 replicas · CPU 60%')
   })
 
   it('reserves the app and creates its AppVersion before persisting the operation', () => {

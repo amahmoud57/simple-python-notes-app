@@ -76,9 +76,9 @@ not live telemetry or controls that mutate the stamp.
 
 ### Verification Results
 
-- 95 Vitest tests pass, covering commands and Deployment actions, the shared CLI timeline,
-  both configuration lifecycles, every deploy journey, settings scenarios in both views,
-  playback, and Technical map fit.
+- 97 Vitest tests pass, covering commands and Deployment actions, the shared CLI timeline,
+  both configuration lifecycles, the `builder.yaml` contract, every deploy journey, settings
+  scenarios in both views, playback, and Technical map fit.
 - TypeScript/Vite production build and Oxlint pass.
 - Playwright verified all seven scenarios, health-before-traffic ordering, release
   success before cleanup, view switching, keyboard stage navigation, and pause.
@@ -186,5 +186,34 @@ Inspected `src/Embr.Builder.Cli` at Embr main `e1676dea9f54aae74ad24d8dbe562e86c
   labels its version "Reused version", and completes as "Activation completed".
 - No CLI command calls `/redeploy`; `AppDeploymentAction` defines `deploy`, `redeploy`, and
   `activate` Deployment actions.
+
+</details>
+
+## builder.yaml Example
+
+The Technical `builder.yaml` node shows a complete manifest for the example app. The file has
+only two top-level keys: optional `name` and `components`. Everything else belongs to a component:
+
+- Static `web`: `role: static`, `rootDirectory`, `platform`, `platformVersion`, `build`,
+  `output`, and `path: /`. Vite supplies `nodejs`, `npm run build`, and `dist` when omitted.
+- Runtime `api`: `role: web`, `rootDirectory`, `platform: python`, `platformVersion`,
+  `path: /api`, and `run` with `port`, `start`, and a required `healthCheckPath` under `/api`.
+
+Version configuration and scaling are Builder App settings, not manifest fields. The example ends
+with a comment showing their current scenario values. The AppVersion stores the same parsed manifest.
+
+<details>
+<summary>Manifest provenance</summary>
+
+Inspected Embr main at `e1676dea9f54aae74ad24d8dbe562e86cc8ed218`:
+
+- `docs/app-manifest.md` defines the component fields, build modes, and web health contract.
+- `AppManifest` has only `name` and `components`. `AppManifestDeserializer` rejects unknown keys,
+  including component `variables`, requires `path` on every component of a multi-component app,
+  and requires each health path to sit within its component mount.
+- `ComponentBuildAdapters`: Vite resolves `nodejs`, `npm run build`, and `dist` when omitted.
+  Generic Oryx compute needs `role: web` or `run` plus a supported platform, rejects `output`,
+  and defaults `run.port` to 8080.
+- `BuilderAppVersion.manifest` is the parsed `AppManifest`.
 
 </details>
