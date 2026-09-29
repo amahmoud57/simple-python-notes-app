@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pathlib import Path
@@ -14,24 +16,26 @@ app = FastAPI(title="Smart Notes", version="0.1.0")
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
-# Qualification-only switch to make one running instance report unhealthy.
-_health = {"ok": True}
+# Qualification-only switch: report unhealthy until a monotonic deadline.
+# The window expires on its own because an unready replica may not receive a
+# follow-up request.
+_health = {"fail_until": 0.0}
 
 # ── API routes ───────────────────────────────────────────────────────────────
 
 @app.get("/api/health")
 async def health():
-    if not _health["ok"]:
+    if time.monotonic() < _health["fail_until"]:
         raise HTTPException(status_code=503, detail="unhealthy for qualification")
     return {"status": "ok", "ai_enabled": is_ai_enabled()}
 
 
 @app.post("/api/_qual/health/{state}")
-async def set_health(state: str):
-    if state not in ("ok", "fail"):
-        raise HTTPException(status_code=400, detail="state must be ok or fail")
-    _health["ok"] = state == "ok"
-    return {"ok": _health["ok"]}
+async def set_health(state: str, seconds: int = 0):
+    if state not in ("ok", "fail") or not 0 <= seconds <= 3600:
+        raise HTTPException(status_code=400, detail="state must be ok or fail; seconds 0-3600")
+    _health["fail_until"] = time.monotonic() + seconds if state == "fail" else 0.0
+    return {"failing_for_seconds": max(0, round(_health["fail_until"] - time.monotonic()))}
 
 
 @app.post("/api/notes", response_model=NoteOut, status_code=201)
