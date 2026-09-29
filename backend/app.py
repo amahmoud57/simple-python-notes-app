@@ -14,11 +14,24 @@ app = FastAPI(title="Smart Notes", version="0.1.0")
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
+# Qualification-only switch to make one running instance report unhealthy.
+_health = {"ok": True}
+
 # ── API routes ───────────────────────────────────────────────────────────────
 
 @app.get("/api/health")
 async def health():
+    if not _health["ok"]:
+        raise HTTPException(status_code=503, detail="unhealthy for qualification")
     return {"status": "ok", "ai_enabled": is_ai_enabled()}
+
+
+@app.post("/api/_qual/health/{state}")
+async def set_health(state: str):
+    if state not in ("ok", "fail"):
+        raise HTTPException(status_code=400, detail="state must be ok or fail")
+    _health["ok"] = state == "ok"
+    return {"ok": _health["ok"]}
 
 
 @app.post("/api/notes", response_model=NoteOut, status_code=201)
